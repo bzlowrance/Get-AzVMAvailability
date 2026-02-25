@@ -5,19 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.8.1] - 2026-02-24
-
-### Added
-- **Minimum similarity threshold** for Capacity Recommender results
-  - New `-MinScore` parameter (default 50) filters out low-similarity SKUs
-- **Documentation**: clarified `-MinScore` tuning (set to 0 to show all candidates)
-
-## [1.8.0] - 2026-02-20
+## [1.8.0] - 2026-02-24
 
 ### Added
 - **Capacity Recommender** — new `-Recommend` parameter finds alternatives when a target SKU
   is unavailable or capacity-constrained
-  - Scores all available SKUs by similarity to target (vCPU, memory, family, generation, architecture)
+  - Scores all available SKUs by similarity to target (vCPU, memory, family, generation, architecture, premium IO)
   - Ranks results by availability + similarity score
   - Deduplicates across regions (keeps best region per SKU)
   - Color-coded console output: green (OK), yellow (LIMITED), dark yellow (constrained)
@@ -26,9 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `-TopN` — number of alternatives to return (default 5, max 25)
   - `-MinvCPU` — minimum vCPU count filter for alternatives
   - `-MinMemoryGB` — minimum memory (GB) filter for alternatives
+  - `-MinScore` — minimum similarity score threshold (default 50)
   - `-JsonOutput` — structured JSON output for Agent/automation consumption
 - **New helper function:** `Get-SkuSimilarityScore` — weighted scoring across 6 dimensions
 - **16 new Pester tests** for similarity scoring (isolated per-dimension + combined scenarios)
+- **Documentation**: clarified `-MinScore` tuning (set to 0 to show all candidates)
 
 ## [1.7.0] - 2026-02-09
 
