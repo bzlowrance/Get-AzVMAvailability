@@ -5,13 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.2] - 2026-03-03
+
+### Fixed
+- Prevent startup failure when assigning `$script:RunContext.AzureEndpoints` by ensuring the property exists before assignment.
+- `New-ScanOutputContract` now accepts empty scan collections so upstream scan errors do not cascade into contract-construction failures.
+- Contract payload builders now use list-backed accumulation to avoid O(n^2) array append behavior in recommend JSON output construction.
+- Family pricing lookup now consistently reads from `$script:RunContext.RegionPricing`.
+- Per-subscription scan timing now reports elapsed time for each subscription independently.
+
+### Changed
+- PowerShell 7+ is now explicitly required; script emits a clear warning and exits when run in Windows PowerShell 5.1.
+- Added README troubleshooting for execution-policy warnings (`Unblock-File`) and stale single-file download detection.
+
 ## [1.10.1] - 2026-03-02
 
 ### Added
 - **"Consider Smaller" fallback** — when no recommended SKUs have OK capacity but smaller options exist, interactive output now suggests top 3 smaller alternatives
 - New helper functions: `Use-SubscriptionContextSafely`, `Restore-OriginalSubscriptionContext`
 - New test files: `tests/ContextManagement.Tests.ps1`, `tests/RecommendJsonContract.Tests.ps1`
-- New test harness module: `tests/TestHarness.psm1` for importable AST-based function loading
 - Stable output contract helpers: `New-RecommendOutputContract`, `New-ScanOutputContract`
 - Recommend output renderer wrapper: `Write-RecommendOutputContract`
 - Explicit run context object: `$script:RunContext` for scoped runtime/cache state
@@ -21,7 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed global `$ErrorActionPreference = 'Continue'` mutation; error behavior is now locally scoped
 - Subscription scanning now isolates and restores Az context via `try/finally` to avoid caller context side effects
 - Hot-loop `+=` accumulation replaced with `List[object]` in recommendation and image-search paths
-- Tests migrated from regex extraction to importable AST-based harness loading
 - Recommend mode now builds a contract first and renders via wrapper in non-JSON output mode
 - JSON output for scan mode now emits a stable contract envelope (`schemaVersion`, `mode`, `generatedAt`, `summary`, `families`, `regionErrors`)
 - Region/pricing/image/runtime mutable state migrated to `$script:RunContext` scoped properties

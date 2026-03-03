@@ -123,12 +123,12 @@
     Author:         Zachary Luz
     Company:        Microsoft
     Created:        2026-01-21
-    Version:        1.10.1
+    Version:        1.10.2
     License:        MIT
     Repository:     https://github.com/zacharyluz/Get-AzVMAvailability
 
     Requirements:   Az.Compute, Az.Resources modules
-                    PowerShell 7+ (for parallel execution)
+                    PowerShell 7+ (required)
 
 .EXAMPLE
     .\Get-AzVMAvailability.ps1
@@ -301,6 +301,13 @@ param(
 
 $ProgressPreference = 'SilentlyContinue'  # Suppress progress bars for faster execution
 
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Warning "PowerShell 7+ is required to run Get-AzVMAvailability.ps1."
+    Write-Host "Current host: $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)" -ForegroundColor Yellow
+    Write-Host "Install PowerShell 7 and rerun with: pwsh -File .\Get-AzVMAvailability.ps1" -ForegroundColor Cyan
+    exit 1
+}
+
 # Normalize string[] params — pwsh -File passes comma-delimited values as a single string
 foreach ($paramName in @('SubscriptionId', 'Region', 'FamilyFilter', 'SkuFilter')) {
     $val = Get-Variable -Name $paramName -ValueOnly -ErrorAction SilentlyContinue
@@ -310,7 +317,7 @@ foreach ($paramName in @('SubscriptionId', 'Region', 'FamilyFilter', 'SkuFilter'
 }
 
 #region Configuration
-$ScriptVersion = "1.10.0"
+$ScriptVersion = "1.10.2"
 
 #region Constants
 $HoursPerMonth = 730
@@ -353,6 +360,7 @@ $MinRecommendationScoreDefault = 50
 $script:RunContext = [pscustomobject]@{
     SchemaVersion      = '1.0'
     OutputWidth        = $null
+    AzureEndpoints     = $null
     ImageReqs          = $null
     RegionPricing      = @{}
     UsingActualPricing = $false
@@ -1139,10 +1147,10 @@ function New-RecommendOutputContract {
         [Parameter(Mandatory)][bool]$FetchPricing
     )
 
-    $rankedPayload = @()
+    $rankedPayload = [System.Collections.Generic.List[object]]::new()
     $rank = 1
     foreach ($item in @($RankedRecommendations)) {
-        $rankedPayload += [pscustomobject]@{
+        $rankedPayload.Add([pscustomobject]@{
             rank       = $rank
             sku        = $item.SKU
             region     = $item.Region
@@ -1161,20 +1169,20 @@ function New-RecommendOutputContract {
             zonesOK    = $item.ZonesOK
             priceHr    = $item.PriceHr
             priceMo    = $item.PriceMo
-        }
+        })
         $rank++
     }
 
-    $belowMinSpecPayload = @()
+    $belowMinSpecPayload = [System.Collections.Generic.List[object]]::new()
     foreach ($item in @($BelowMinSpec)) {
-        $belowMinSpecPayload += [pscustomobject]@{
+        $belowMinSpecPayload.Add([pscustomobject]@{
             sku      = $item.SKU
             region   = $item.Region
             vCPU     = $item.vCPU
             memGiB   = $item.MemGiB
             score    = $item.Score
             capacity = $item.Capacity
-        }
+        })
     }
 
     return [pscustomobject]@{
@@ -1250,7 +1258,8 @@ function Write-RecommendOutputContract {
     $availableRegions = @($targetAvailability | Where-Object { $_.Status -eq 'OK' })
     $unavailableRegions = @($targetAvailability | Where-Object { $_.Status -ne 'OK' })
     if ($availableRegions.Count -gt 0) {
-        Write-Host "  $($Icons.Check) Available in: $($availableRegions.ForEach({ $_.Region }) -join ', ')" -ForegroundColor Green
+        $availableRegionNames = @($availableRegions | ForEach-Object { $_.Region })
+        Write-Host "  $($Icons.Check) Available in: $($availableRegionNames -join ', ')" -ForegroundColor Green
     }
     foreach ($ur in $unavailableRegions) {
         Write-Host "  $($Icons.Error) $($ur.Region): $($ur.Status)" -ForegroundColor Red
@@ -1336,9 +1345,9 @@ function Write-RecommendOutputContract {
 function New-ScanOutputContract {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
-        [Parameter(Mandatory)][array]$SubscriptionData,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$SubscriptionData,
         [Parameter(Mandatory)][hashtable]$FamilyStats,
-        [Parameter(Mandatory)][array]$FamilyDetails,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$FamilyDetails,
         [Parameter(Mandatory)][string[]]$Regions,
         [Parameter(Mandatory)][string[]]$SubscriptionIds
     )
@@ -1920,6 +1929,12 @@ function Get-AzActualPricing {
 #endregion Image Compatibility Functions
 #region Initialize Azure Endpoints
 $script:AzureEndpoints = Get-AzureEndpoints -EnvironmentName $script:TargetEnvironment
+if (-not $script:RunContext) {
+    $script:RunContext = [pscustomobject]@{}
+}
+if (-not ($script:RunContext.PSObject.Properties.Name -contains 'AzureEndpoints')) {
+    Add-Member -InputObject $script:RunContext -MemberType NoteProperty -Name AzureEndpoints -Value $null
+}
 $script:RunContext.AzureEndpoints = $script:AzureEndpoints
 
 #endregion Initialize Azure Endpoints
@@ -2440,13 +2455,13 @@ if ($FetchPricing) {
 }
 
 $allSubscriptionData = @()
-$scanStartTime = Get-Date
 
 $initialAzContext = Get-AzContext -ErrorAction SilentlyContinue
 $initialSubscriptionId = if ($initialAzContext -and $initialAzContext.Subscription) { [string]$initialAzContext.Subscription.Id } else { $null }
 
 try {
     foreach ($subId in $TargetSubIds) {
+        $scanStartTime = Get-Date
         try {
             Use-SubscriptionContextSafely -SubscriptionId $subId | Out-Null
         }
@@ -2462,10 +2477,8 @@ try {
         $regionCount = $Regions.Count
         Write-Progress -Activity "Scanning Azure Regions" -Status "Querying $regionCount region(s) in parallel..." -PercentComplete 0
 
-        $regionData = $Regions | ForEach-Object -Parallel {
-            $region = [string]$_
-            $skuFilterCopy = $using:SkuFilter
-            $maxRetries = $using:MaxRetries
+        $scanRegionScript = {
+            param($region, $skuFilterCopy, $maxRetries)
 
             # Inline retry — parallel runspaces cannot see script-scope functions
             $retryCall = {
@@ -2522,7 +2535,27 @@ try {
             catch {
                 @{ Region = [string]$region; Skus = @(); Quotas = @(); Error = $_.Exception.Message }
             }
-        } -ThrottleLimit $ParallelThrottleLimit
+        }
+
+        $canUseParallel = $PSVersionTable.PSVersion.Major -ge 7
+        if ($canUseParallel) {
+            try {
+                $regionData = $Regions | ForEach-Object -Parallel {
+                    & $using:scanRegionScript -region ([string]$_) -skuFilterCopy $using:SkuFilter -maxRetries $using:MaxRetries
+                } -ThrottleLimit $ParallelThrottleLimit
+            }
+            catch {
+                Write-Warning "Parallel region scan failed: $($_.Exception.Message)"
+                Write-Warning "Falling back to sequential scan mode for compatibility."
+                $canUseParallel = $false
+            }
+        }
+
+        if (-not $canUseParallel) {
+            $regionData = foreach ($region in $Regions) {
+                & $scanRegionScript -region ([string]$region) -skuFilterCopy $SkuFilter -maxRetries $MaxRetries
+            }
+        }
 
         Write-Progress -Activity "Scanning Azure Regions" -Completed
 
@@ -2639,7 +2672,7 @@ foreach ($subscriptionData in $allSubscriptionData) {
             $priceHrStr = '-'
             $priceMoStr = '-'
             # Get pricing data - handle potential array wrapping
-            $regionPricingData = $script:regionPricing[$region]
+            $regionPricingData = $script:RunContext.RegionPricing[$region]
             if ($regionPricingData -is [array]) { $regionPricingData = $regionPricingData[0] }
             if ($FetchPricing -and $regionPricingData -and $regionPricingData.Count -gt 1) {
                 $sortedSkus = $skus | ForEach-Object {
