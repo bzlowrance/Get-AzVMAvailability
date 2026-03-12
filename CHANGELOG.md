@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.11.0] - 2026-03-12
+
+### Added
+- `-ShowPlacement` parameter to display allocation likelihood scores (High/Medium/Low) for each SKU
+- `-ShowSpot` parameter to include Spot VM pricing in pricing-enabled outputs
+- `Get-PlacementScores` helper using `Invoke-AzSpotPlacementScore` (batched ≤5 SKUs × ≤8 regions)
+- Placement score fields in Recommend JSON contract: `placementEnabled`, `allocScore`
+- Spot pricing fields in Recommend JSON contract: `spotPricingEnabled`, `spotPriceHr`, `spotPriceMo`
+- New helper `Get-SpotPricingMap` to safely read Spot pricing from region pricing containers
+- New helper `Get-RegularPricingMap` to extract regular pricing from split pricing containers
+- Interactive post-scan prompts for `-ShowPlacement` and `-ShowSpot` (fires after scan, before rendering; skipped when `-NoPrompt`)
+- Placement score enrichment in filtered scan mode (when `-SkuFilter` selects ≤5 SKUs)
+- New test files: `tests/PlacementScore.Tests.ps1`, `tests/SpotPricing.Tests.ps1`
+- Contract coverage tests in `tests/RecommendJsonContract.Tests.ps1`
+
+### Fixed
+- `$script:RunContext` initialization missing `ShowPlacement`, `DesiredCount`, and `AzureEndpoints` properties (caused silent failures when placement or endpoint logic accessed these fields)
+
+### Changed
+- `Get-AzVMPricing` now returns separate Regular and Spot pricing maps instead of a single combined map
+- Recommend console rendering now supports pricing/placement/spot combinations without breaking existing output modes
+
 ## [1.10.4] - 2026-03-04
 
 ### Fixed
