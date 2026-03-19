@@ -101,6 +101,9 @@ User request
     ├─ "E64pds_v6 is constrained, what else can I use?"
     │   └─ THIS SKILL → Recommend mode
     │
+    ├─ "Can my VM fleet deploy in eastus?" / "Check this BOM"
+    │   └─ THIS SKILL → Fleet mode (-FleetFile or -Fleet)
+    │
     ├─ "Compare eastus vs westus2 for D-series"
     │   └─ THIS SKILL → Scan mode, multi-region
     │
@@ -191,7 +194,59 @@ User request
 - `-ShowSpot` only adds value when `-ShowPricing` is also set (spot dollar values need pricing context)
 - Placement API accepts max 5 SKUs x 8 regions per call -- larger sets are truncated with a verbose warning
 
-### Workflow 7: Export for Reporting
+### Workflow 7: Fleet Readiness (BOM Validation)
+
+**Scenario:** Validate that an entire VM fleet (bill of materials) can be deployed — checks capacity and quota for every SKU in the BOM simultaneously.
+
+```powershell
+# Step 1: Generate template files (no Azure login needed)
+.\Get-AzVMAvailability.ps1 -GenerateFleetTemplate
+# → Creates fleet-template.csv and fleet-template.json in current directory
+# → Edit with your actual SKUs and quantities
+
+# Step 2: Run the scan with your fleet file
+.\Get-AzVMAvailability.ps1 -FleetFile .\fleet-template.csv -Region "eastus" -NoPrompt
+
+# Alternative: CSV file (export from Excel, paste from table)
+.\Get-AzVMAvailability.ps1 -FleetFile .\fleet.csv -Region "eastus" -NoPrompt
+
+# Alternative: Inline hashtable (for scripting/automation)
+.\Get-AzVMAvailability.ps1 -Fleet @{'Standard_D2s_v5'=17; 'Standard_D4s_v5'=4; 'Standard_D8s_v5'=5} -Region "eastus" -NoPrompt
+
+# Alternative: JSON file input (for automation pipelines)
+.\Get-AzVMAvailability.ps1 -FleetFile .\fleet.json -Region "eastus" -NoPrompt -JsonOutput
+```
+
+**CSV file format** (save as `fleet.csv`):
+```csv
+SKU,Qty
+Standard_D2s_v5,17
+Standard_D4s_v5,4
+Standard_D8s_v5,5
+Standard_D16ds_v5,1
+Standard_D16ls_v6,1
+```
+
+**JSON file format** (save as `fleet.json`):
+```json
+[
+  { "SKU": "Standard_D2s_v5", "Qty": 17 },
+  { "SKU": "Standard_D4s_v5", "Qty": 4 },
+  { "SKU": "Standard_D8s_v5", "Qty": 5 },
+  { "SKU": "Standard_D16ds_v5", "Qty": 1 },
+  { "SKU": "Standard_D16ls_v6", "Qty": 1 }
+]
+```
+
+**Column name flexibility:** The parser accepts `SKU`, `Name`, or `VmSize` for the SKU column, and `Qty`, `Quantity`, or `Count` for the quantity column. Duplicate SKU rows are summed automatically.
+
+**Output:** Color-coded per-SKU capacity table + per-family quota pass/fail (Used/Available/Limit) + overall PASS/FAIL verdict.
+
+**When to route here vs Recommend mode:**
+- User has a specific BOM (list of SKUs + quantities) → **Fleet mode**
+- User has ONE constrained SKU and wants alternatives → **Recommend mode**
+
+### Workflow 8: Export for Reporting
 
 ```powershell
 # Auto-export to XLSX (styled, color-coded)

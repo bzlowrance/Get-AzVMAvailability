@@ -124,14 +124,25 @@
 .NOTES
     Name:           Get-AzVMAvailability
     Author:         Zachary Luz
-    Company:        Microsoft
     Created:        2026-01-21
-    Version:        1.12.0
+    Version:        1.12.1
     License:        MIT
     Repository:     https://github.com/zacharyluz/Get-AzVMAvailability
 
     Requirements:   Az.Compute, Az.Resources modules
                     PowerShell 7+ (required)
+
+    DISCLAIMER
+    The author is a Microsoft employee; however, this is a personal open-source
+    project. It is not an official Microsoft product, nor is it endorsed,
+    sponsored, or supported by Microsoft.
+
+    This sample script is not supported under any Microsoft standard support
+    program or service. The sample script is provided AS IS without warranty
+    of any kind. Microsoft further disclaims all implied warranties including,
+    without limitation, any implied warranties of merchantability or of fitness
+    for a particular purpose. The entire risk arising out of the use or
+    performance of the sample scripts and documentation remains with you.
 
 .EXAMPLE
     .\Get-AzVMAvailability.ps1
@@ -207,6 +218,24 @@
     (https://github.com/ZacharyLuz/AzVMAvailability-Agent) which parses this output to
     provide conversational VM recommendations. Also useful for piping into other tools
     or storing scan results programmatically.
+
+.EXAMPLE
+    .\Get-AzVMAvailability.ps1 -FleetFile .\fleet.csv -Region "eastus" -NoPrompt
+    Load a fleet BOM from CSV file. The CSV needs SKU and Qty columns:
+    SKU,Qty
+    Standard_D2s_v5,17
+    Standard_D4s_v5,4
+    Standard_D8s_v5,5
+
+.EXAMPLE
+    .\Get-AzVMAvailability.ps1 -Fleet @{'Standard_D2s_v5'=17; 'Standard_D4s_v5'=4; 'Standard_D8s_v5'=5} -Region "eastus" -NoPrompt
+    Inline fleet BOM using PowerShell hashtable syntax.
+
+.EXAMPLE
+    .\Get-AzVMAvailability.ps1 -GenerateFleetTemplate
+    Creates fleet-template.csv and fleet-template.json in the current directory.
+    Edit the files with your VM SKUs and quantities, then run:
+    .\Get-AzVMAvailability.ps1 -FleetFile .\fleet-template.csv -Region "eastus" -NoPrompt
 
 .EXAMPLE
     .\Get-AzVMAvailability.ps1
@@ -312,10 +341,51 @@ param(
     [switch]$SkipRegionValidation,
 
     [Parameter(Mandatory = $false, HelpMessage = "Fleet BOM: hashtable of SKU=Quantity pairs for fleet readiness validation (e.g., @{'Standard_D2s_v5'=17; 'Standard_D4s_v5'=4})")]
-    [hashtable]$Fleet
+    [hashtable]$Fleet,
+
+    [Parameter(Mandatory = $false, HelpMessage = "Path to a CSV or JSON fleet BOM file. CSV: columns SKU,Qty. JSON: array of {SKU:'...',Qty:N} objects. Duplicate SKUs are summed.")]
+    [string]$FleetFile,
+
+    [Parameter(Mandatory = $false, HelpMessage = "Generate fleet-template.csv and fleet-template.json in the current directory, then exit. No Azure login required.")]
+    [switch]$GenerateFleetTemplate
 )
 
 $ProgressPreference = 'SilentlyContinue'  # Suppress progress bars for faster execution
+
+#region GenerateFleetTemplate
+if ($GenerateFleetTemplate) {
+    if ($JsonOutput) { throw "Cannot use -GenerateFleetTemplate with -JsonOutput. Template generation writes files to disk, not JSON to stdout." }
+    $csvPath = Join-Path $PWD 'fleet-template.csv'
+    $jsonPath = Join-Path $PWD 'fleet-template.json'
+    $csvContent = @"
+SKU,Qty
+Standard_D2s_v5,10
+Standard_D4s_v5,5
+Standard_D8s_v5,3
+Standard_E4s_v5,2
+Standard_E16s_v5,1
+"@
+    $jsonContent = @"
+[
+  { "SKU": "Standard_D2s_v5", "Qty": 10 },
+  { "SKU": "Standard_D4s_v5", "Qty": 5 },
+  { "SKU": "Standard_D8s_v5", "Qty": 3 },
+  { "SKU": "Standard_E4s_v5", "Qty": 2 },
+  { "SKU": "Standard_E16s_v5", "Qty": 1 }
+]
+"@
+    Set-Content -Path $csvPath -Value $csvContent -Encoding utf8
+    Set-Content -Path $jsonPath -Value $jsonContent -Encoding utf8
+    Write-Host "Created fleet templates:" -ForegroundColor Green
+    Write-Host "  CSV: $csvPath" -ForegroundColor Cyan
+    Write-Host "  JSON: $jsonPath" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Next steps:" -ForegroundColor Yellow
+    Write-Host "  1. Edit the template with your VM SKUs and quantities"
+    Write-Host "  2. Run: .\Get-AzVMAvailability.ps1 -FleetFile .\fleet-template.csv -Region 'eastus' -NoPrompt"
+    return
+}
+#endregion GenerateFleetTemplate
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     Write-Warning "PowerShell 7+ is required to run Get-AzVMAvailability.ps1."
@@ -332,6 +402,46 @@ foreach ($paramName in @('SubscriptionId', 'Region', 'FamilyFilter', 'SkuFilter'
     }
 }
 
+# FleetFile: load CSV/JSON into $Fleet hashtable
+if ($FleetFile) {
+    if ($Fleet) { throw "Cannot specify both -Fleet and -FleetFile. Use one or the other." }
+    if (-not (Test-Path -LiteralPath $FleetFile -PathType Leaf)) { throw "Fleet file not found or is not a file: $FleetFile" }
+    $ext = [System.IO.Path]::GetExtension($FleetFile).ToLower()
+    if ($ext -notin '.csv', '.json') { throw "Unsupported file type '$ext'. FleetFile must be .csv or .json" }
+    if ($ext -eq '.json') {
+        $jsonData = @(Get-Content -LiteralPath $FleetFile -Raw | ConvertFrom-Json)
+        $Fleet = @{}
+        foreach ($item in $jsonData) {
+            $skuProp = ($item.PSObject.Properties | Where-Object { $_.Name -match '^(SKU|Name|VmSize|Intel\.SKU)$' } | Select-Object -First 1).Value
+            $qtyProp = ($item.PSObject.Properties | Where-Object { $_.Name -match '^(Qty|Quantity|Count)$' } | Select-Object -First 1).Value
+            if ($skuProp -and $qtyProp) {
+                $skuClean = $skuProp.Trim()
+                $qtyInt = [int]$qtyProp
+                if ($qtyInt -le 0) { throw "Invalid quantity '$qtyProp' for SKU '$skuClean'. Qty must be a positive integer." }
+                if ($Fleet.ContainsKey($skuClean)) { $Fleet[$skuClean] += $qtyInt }
+                else { $Fleet[$skuClean] = $qtyInt }
+            }
+        }
+    }
+    else {
+        $csvData = Import-Csv -LiteralPath $FleetFile
+        $Fleet = @{}
+        foreach ($row in $csvData) {
+            $skuProp = ($row.PSObject.Properties | Where-Object { $_.Name -match '^(SKU|Name|VmSize|Intel\.SKU)$' } | Select-Object -First 1).Value
+            $qtyProp = ($row.PSObject.Properties | Where-Object { $_.Name -match '^(Qty|Quantity|Count)$' } | Select-Object -First 1).Value
+            if ($skuProp -and $qtyProp) {
+                $skuClean = $skuProp.Trim()
+                $qtyInt = [int]$qtyProp
+                if ($qtyInt -le 0) { throw "Invalid quantity '$qtyProp' for SKU '$skuClean'. Qty must be a positive integer." }
+                if ($Fleet.ContainsKey($skuClean)) { $Fleet[$skuClean] += $qtyInt }
+                else { $Fleet[$skuClean] = $qtyInt }
+            }
+        }
+    }
+    if ($Fleet.Count -eq 0) { throw "No valid SKU/Qty rows found in $FleetFile. Expected columns: SKU (or Name/VmSize), Qty (or Quantity/Count)" }
+    if (-not $JsonOutput) { Write-Host "Loaded $($Fleet.Count) SKUs from $FleetFile" -ForegroundColor Cyan }
+}
+
 # Fleet mode: normalize keys (strip double-prefix) and derive SkuFilter
 if ($Fleet -and $Fleet.Count -gt 0) {
     $normalizedFleet = @{}
@@ -346,7 +456,7 @@ if ($Fleet -and $Fleet.Count -gt 0) {
 }
 
 #region Configuration
-$ScriptVersion = "1.12.0"
+$ScriptVersion = "1.12.1"
 
 #region Constants
 $HoursPerMonth = 730
@@ -2966,6 +3076,7 @@ $script:RunContext.OutputWidth = $script:OutputWidth
 Write-Host "`n" -NoNewline
 Write-Host ("=" * $script:OutputWidth) -ForegroundColor Gray
 Write-Host "GET-AZVMAVAILABILITY v$ScriptVersion" -ForegroundColor Green
+Write-Host "Personal project — not an official Microsoft product. Provided AS IS." -ForegroundColor DarkGray
 Write-Host ("=" * $script:OutputWidth) -ForegroundColor Gray
 Write-Host "Subscriptions: $($TargetSubIds.Count) | Regions: $($Regions -join ', ')" -ForegroundColor Cyan
 if ($SkuFilter -and $SkuFilter.Count -gt 0) {

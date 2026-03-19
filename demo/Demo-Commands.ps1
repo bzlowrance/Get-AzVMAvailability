@@ -128,6 +128,29 @@ Get-Module Az.Compute -ListAvailable | Select-Object Name, Version -First 1
     -NoPrompt
 #endregion Scenario 7
 
+#region Scenario 7B — Fleet Readiness (BOM Validation) (~3 min)
+# Validate an entire VM fleet BOM against a region's capacity and quota.
+# This is a PASS/FAIL check: can all VMs in my deployment plan be provisioned?
+
+# Option A: Load from CSV file (easiest for non-PowerShell users)
+.\Get-AzVMAvailability.ps1 `
+    -FleetFile .\examples\fleet-bom.csv `
+    -Region "eastus" `
+    -NoPrompt
+
+# Option B: Inline hashtable (for scripting)
+# .\Get-AzVMAvailability.ps1 `
+#     -Fleet @{'Standard_D2s_v5'=17; 'Standard_D4s_v5'=4; 'Standard_D8s_v5'=5; 'Standard_D16ds_v5'=1; 'Standard_D16ls_v6'=1} `
+#     -Region "eastus" `
+#     -NoPrompt
+#endregion Scenario 7B
+
+#region Scenario 7C — Generate Fleet Template
+# Generate starter CSV + JSON fleet template files — no Azure login needed.
+# Users edit the template with their actual SKUs, then run -FleetFile.
+.\Get-AzVMAvailability.ps1 -GenerateFleetTemplate
+#endregion Scenario 7C
+
 # ============================================================
 # RUN: "Automation & Export"
 # ============================================================
