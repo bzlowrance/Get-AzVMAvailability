@@ -461,7 +461,6 @@ $ScriptVersion = "1.12.1"
 #region Constants
 $HoursPerMonth = 730
 $ParallelThrottleLimit = 4
-$MBPerGB = 1024
 $OutputWidthWithPricing = 140
 $OutputWidthBase = 122
 $OutputWidthMin = 100
@@ -903,13 +902,17 @@ function Get-ValidAzureRegions {
     .DESCRIPTION
         Uses REST API for speed (2-3x faster than Get-AzLocation).
         Falls back to Get-AzLocation if REST API fails.
-        Caches result at script scope to avoid repeated calls.
+        Caches result in the passed-in -Caches dictionary to avoid repeated calls.
     #>
     [OutputType([string[]])]
-    param()
+    param(
+        [int]$MaxRetries = 3,
+        [hashtable]$AzureEndpoints,
+        [System.Collections.IDictionary]$Caches = @{}
+    )
 
     # Return cached result if available
-    $cachedRegions = if ($script:RunContext -and $script:RunContext.Caches) { $script:RunContext.Caches.ValidRegions } else { $script:CachedValidRegions }
+    $cachedRegions = $Caches.ValidRegions
     if ($cachedRegions) {
         Write-Verbose "Using cached region list ($($cachedRegions.Count) regions)"
         return $cachedRegions
@@ -927,7 +930,7 @@ function Get-ValidAzureRegions {
         $subId = $ctx.Subscription.Id
 
         # Use environment-aware ARM URL (supports sovereign clouds)
-        $armUrl = if ($script:AzureEndpoints) { $script:AzureEndpoints.ResourceManagerUrl } else { 'https://management.azure.com' }
+        $armUrl = if ($AzureEndpoints) { $AzureEndpoints.ResourceManagerUrl } else { 'https://management.azure.com' }
         $armUrl = $armUrl.TrimEnd('/')
 
         $token = (Get-AzAccessToken -ResourceUrl $armUrl -ErrorAction Stop).Token
@@ -960,10 +963,7 @@ function Get-ValidAzureRegions {
         }
 
         Write-Verbose "Fetched $($validRegions.Count) regions via REST API"
-        $script:CachedValidRegions = @($validRegions)
-        if ($script:RunContext -and $script:RunContext.Caches) {
-            $script:RunContext.Caches.ValidRegions = @($validRegions)
-        }
+        $Caches.ValidRegions = @($validRegions)
         return @($validRegions)
     }
     catch {
@@ -981,10 +981,7 @@ function Get-ValidAzureRegions {
             }
 
             Write-Verbose "Fetched $($validRegions.Count) regions via Get-AzLocation"
-            $script:CachedValidRegions = @($validRegions)
-            if ($script:RunContext -and $script:RunContext.Caches) {
-                $script:RunContext.Caches.ValidRegions = @($validRegions)
-            }
+            $Caches.ValidRegions = @($validRegions)
             return @($validRegions)
         }
         catch {
@@ -1357,7 +1354,11 @@ function Write-FleetReadinessSummary {
 }
 
 function Get-StatusIcon {
-    param([string]$Status)
+    param(
+        [string]$Status,
+        [Parameter(Mandatory)]
+        [hashtable]$Icons
+    )
     switch ($Status) {
         'OK' { return $Icons.OK }
         'CAPACITY-CONSTRAINED' { return $Icons.CAPACITY }
@@ -1450,7 +1451,8 @@ function Get-SkuSimilarityScore {
     #>
     param(
         [Parameter(Mandatory)][hashtable]$Target,
-        [Parameter(Mandatory)][hashtable]$Candidate
+        [Parameter(Mandatory)][hashtable]$Candidate,
+        [hashtable]$FamilyInfo
     )
 
     $score = 0
@@ -1474,8 +1476,8 @@ function Get-SkuSimilarityScore {
         $score += 20
     }
     else {
-        $targetInfo = if ($script:FamilyInfo) { $script:FamilyInfo[$Target.Family] } else { $null }
-        $candidateInfo = if ($script:FamilyInfo) { $script:FamilyInfo[$Candidate.Family] } else { $null }
+        $targetInfo = if ($FamilyInfo) { $FamilyInfo[$Target.Family] } else { $null }
+        $candidateInfo = if ($FamilyInfo) { $FamilyInfo[$Candidate.Family] } else { $null }
         $targetCat = if ($targetInfo) { $targetInfo.Category } else { 'Unknown' }
         $candidateCat = if ($candidateInfo) { $candidateInfo.Category } else { 'Unknown' }
         if ($targetCat -ne 'Unknown' -and $targetCat -eq $candidateCat) {
@@ -1589,6 +1591,7 @@ function Write-RecommendOutputContract {
         [Parameter(Mandatory)][pscustomobject]$Contract,
         [Parameter(Mandatory)][hashtable]$Icons,
         [Parameter(Mandatory)][bool]$FetchPricing,
+        [Parameter(Mandatory)][hashtable]$FamilyInfo,
         [int]$OutputWidth = 122
     )
 
@@ -1828,7 +1831,38 @@ function Invoke-RecommendMode {
         [string]$TargetSkuName,
 
         [Parameter(Mandatory)]
-        [array]$SubscriptionData
+        [array]$SubscriptionData,
+
+        [hashtable]$FamilyInfo = @{},
+
+        [hashtable]$Icons = @{},
+
+        [bool]$FetchPricing = $false,
+
+        [bool]$ShowSpot = $false,
+
+        [bool]$ShowPlacement = $false,
+
+        [bool]$AllowMixedArch = $false,
+
+        [int]$MinvCPU = 0,
+
+        [int]$MinMemoryGB = 0,
+
+        [Nullable[int]]$MinScore,
+
+        [int]$TopN = 5,
+
+        [int]$DesiredCount = 1,
+
+        [bool]$JsonOutput = $false,
+
+        [int]$MaxRetries = 3,
+
+        [Parameter(Mandatory)]
+        [pscustomobject]$RunContext,
+
+        [int]$OutputWidth = 122
     )
 
     $targetSku = $null
@@ -1907,14 +1941,14 @@ function Invoke-RecommendMode {
                     continue
                 }
 
-                $simScore = Get-SkuSimilarityScore -Target $targetProfile -Candidate $candidateProfile
+                $simScore = Get-SkuSimilarityScore -Target $targetProfile -Candidate $candidateProfile -FamilyInfo $FamilyInfo
 
                 $priceHr = $null
                 $priceMo = $null
                 $spotPriceHr = $null
                 $spotPriceMo = $null
-                if ($FetchPricing -and $script:RunContext.RegionPricing[[string]$region]) {
-                    $regionPriceData = $script:RunContext.RegionPricing[[string]$region]
+                if ($FetchPricing -and $RunContext.RegionPricing[[string]$region]) {
+                    $regionPriceData = $RunContext.RegionPricing[[string]$region]
                     $regularPriceMap = Get-RegularPricingMap -PricingContainer $regionPriceData
                     $spotPriceMap = Get-SpotPricingMap -PricingContainer $regionPriceData
                     $skuPricing = $regularPriceMap[$sku.Name]
@@ -1978,14 +2012,14 @@ function Invoke-RecommendMode {
     }
 
     if (-not $filtered -or $filtered.Count -eq 0) {
-        $script:RunContext.RecommendOutput = New-RecommendOutputContract -TargetProfile $targetProfile -TargetAvailability @($targetRegionStatus) -RankedRecommendations @() -Warnings @() -BelowMinSpec @($belowMinSpec) -MinScore $MinScore -TopN $TopN -FetchPricing ([bool]$FetchPricing) -ShowPlacement ([bool]$ShowPlacement) -ShowSpot ([bool]$ShowSpot
+        $RunContext.RecommendOutput = New-RecommendOutputContract -TargetProfile $targetProfile -TargetAvailability @($targetRegionStatus) -RankedRecommendations @() -Warnings @() -BelowMinSpec @($belowMinSpec) -MinScore $MinScore -TopN $TopN -FetchPricing ([bool]$FetchPricing) -ShowPlacement ([bool]$ShowPlacement) -ShowSpot ([bool]$ShowSpot
         )
         if ($JsonOutput) {
-            $script:RunContext.RecommendOutput | ConvertTo-Json -Depth 6
+            $RunContext.RecommendOutput | ConvertTo-Json -Depth 6
             return
         }
 
-        Write-RecommendOutputContract -Contract $script:RunContext.RecommendOutput -Icons $Icons -FetchPricing ([bool]$FetchPricing) -OutputWidth $script:OutputWidth
+        Write-RecommendOutputContract -Contract $RunContext.RecommendOutput -Icons $Icons -FetchPricing ([bool]$FetchPricing) -FamilyInfo $FamilyInfo -OutputWidth $OutputWidth
         return
     }
 
@@ -1998,7 +2032,7 @@ function Invoke-RecommendMode {
     Select-Object -First $TopN
 
     if ($ShowPlacement) {
-        $placementScores = Get-PlacementScores -SkuNames @($ranked | Select-Object -ExpandProperty SKU) -Regions @($ranked | Select-Object -ExpandProperty Region) -DesiredCount $DesiredCount
+        $placementScores = Get-PlacementScores -SkuNames @($ranked | Select-Object -ExpandProperty SKU) -Regions @($ranked | Select-Object -ExpandProperty Region) -DesiredCount $DesiredCount -MaxRetries $MaxRetries -Caches $RunContext.Caches
         $ranked = @($ranked | ForEach-Object {
                 $item = $_
                 $key = "{0}|{1}" -f $item.SKU, $item.Region.ToLower()
@@ -2082,15 +2116,15 @@ function Invoke-RecommendMode {
         $fleetWarnings += "Mixed accelerated networking support — network performance will vary across the fleet."
     }
 
-    $script:RunContext.RecommendOutput = New-RecommendOutputContract -TargetProfile $targetProfile -TargetAvailability @($targetRegionStatus) -RankedRecommendations @($ranked) -Warnings @($fleetWarnings) -BelowMinSpec @($belowMinSpec) -MinScore $MinScore -TopN $TopN -FetchPricing ([bool]$FetchPricing) -ShowPlacement ([bool]$ShowPlacement) -ShowSpot ([bool]$ShowSpot
+    $RunContext.RecommendOutput = New-RecommendOutputContract -TargetProfile $targetProfile -TargetAvailability @($targetRegionStatus) -RankedRecommendations @($ranked) -Warnings @($fleetWarnings) -BelowMinSpec @($belowMinSpec) -MinScore $MinScore -TopN $TopN -FetchPricing ([bool]$FetchPricing) -ShowPlacement ([bool]$ShowPlacement) -ShowSpot ([bool]$ShowSpot
     )
 
     if ($JsonOutput) {
-        $script:RunContext.RecommendOutput | ConvertTo-Json -Depth 6
+        $RunContext.RecommendOutput | ConvertTo-Json -Depth 6
         return
     }
 
-    Write-RecommendOutputContract -Contract $script:RunContext.RecommendOutput -Icons $Icons -FetchPricing ([bool]$FetchPricing) -OutputWidth $script:OutputWidth
+    Write-RecommendOutputContract -Contract $RunContext.RecommendOutput -Icons $Icons -FetchPricing ([bool]$FetchPricing) -FamilyInfo $FamilyInfo -OutputWidth $OutputWidth
 }
 
 #endregion Helper Functions
@@ -2175,9 +2209,10 @@ function Get-SkuCapabilities {
                 'HyperVGenerations' { $capabilities.HyperVGenerations = $cap.Value }
                 'CpuArchitectureType' { $capabilities.CpuArchitecture = $cap.Value }
                 'MaxResourceVolumeMB' {
+                    $MiBPerGiB = 1024
                     $mb = 0
                     if ([int]::TryParse($cap.Value, [ref]$mb) -and $mb -gt 0) {
-                        $capabilities.TempDiskGB = [math]::Round($mb / $MBPerGB, 0)
+                        $capabilities.TempDiskGB = [math]::Round($mb / $MiBPerGiB, 0)
                     }
                 }
                 'AcceleratedNetworkingEnabled' {
@@ -2258,16 +2293,26 @@ function Get-AzVMPricing {
     #>
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Region
+        [string]$Region,
+
+        [int]$MaxRetries = 3,
+
+        [int]$HoursPerMonth = 730,
+
+        [hashtable]$AzureEndpoints,
+
+        [string]$TargetEnvironment = 'AzureCloud',
+
+        [System.Collections.IDictionary]$Caches = @{}
     )
 
-    if (-not $script:RunContext.Caches.Pricing) {
-        $script:RunContext.Caches.Pricing = @{}
+    if (-not $Caches.Pricing) {
+        $Caches.Pricing = @{}
     }
 
     # Get environment-specific endpoints (supports sovereign clouds)
-    if (-not $script:AzureEndpoints) {
-        $script:AzureEndpoints = Get-AzureEndpoints -EnvironmentName $script:TargetEnvironment
+    if (-not $AzureEndpoints) {
+        $AzureEndpoints = Get-AzureEndpoints -EnvironmentName $TargetEnvironment
     }
 
     $armLocation = $Region.ToLower() -replace '\s', ''
@@ -2277,7 +2322,7 @@ function Get-AzVMPricing {
 
     $regularPrices = @{}
     $spotPrices = @{}
-    $apiUrl = "$($script:AzureEndpoints.PricingApiUrl)?`$filter=$([uri]::EscapeDataString($filter))"
+    $apiUrl = "$($AzureEndpoints.PricingApiUrl)?`$filter=$([uri]::EscapeDataString($filter))"
 
     try {
         $nextLink = $apiUrl
@@ -2324,7 +2369,7 @@ function Get-AzVMPricing {
             Spot    = $spotPrices
         }
 
-        $script:RunContext.Caches.Pricing[$armLocation] = $result
+        $Caches.Pricing[$armLocation] = $result
 
         return $result
     }
@@ -2400,7 +2445,11 @@ function Get-PlacementScores {
         [ValidateRange(1, 1000)]
         [int]$DesiredCount = 1,
 
-        [switch]$IncludeAvailabilityZone
+        [switch]$IncludeAvailabilityZone,
+
+        [int]$MaxRetries = 3,
+
+        [System.Collections.IDictionary]$Caches = @{}
     )
 
     $scores = @{}
@@ -2433,9 +2482,9 @@ function Get-PlacementScores {
         $errorText = $_.Exception.Message
         $isForbidden = $errorText -match '403|forbidden|authorization|not authorized|insufficient privileges'
         if ($isForbidden) {
-            if (-not $script:RunContext.Caches.PlacementWarned403) {
+            if (-not $Caches.PlacementWarned403) {
                 Write-Warning 'Placement score lookup skipped: missing permissions (Compute Recommendations Role).'
-                $script:RunContext.Caches.PlacementWarned403 = $true
+                $Caches.PlacementWarned403 = $true
             }
             return $scores
         }
@@ -2492,16 +2541,26 @@ function Get-AzActualPricing {
         [string]$SubscriptionId,
 
         [Parameter(Mandatory = $true)]
-        [string]$Region
+        [string]$Region,
+
+        [int]$MaxRetries = 3,
+
+        [int]$HoursPerMonth = 730,
+
+        [hashtable]$AzureEndpoints,
+
+        [string]$TargetEnvironment = 'AzureCloud',
+
+        [System.Collections.IDictionary]$Caches = @{}
     )
 
-    if (-not $script:RunContext.Caches.ActualPricing) {
-        $script:RunContext.Caches.ActualPricing = @{}
+    if (-not $Caches.ActualPricing) {
+        $Caches.ActualPricing = @{}
     }
     $cacheKey = "$SubscriptionId-$Region"
 
-    if ($script:RunContext.Caches.ActualPricing.ContainsKey($cacheKey)) {
-        return $script:RunContext.Caches.ActualPricing[$cacheKey]
+    if ($Caches.ActualPricing.ContainsKey($cacheKey)) {
+        return $Caches.ActualPricing[$cacheKey]
     }
 
     $armLocation = $Region.ToLower() -replace '\s', ''
@@ -2509,10 +2568,10 @@ function Get-AzActualPricing {
 
     try {
         # Get environment-specific endpoints (supports sovereign clouds)
-        if (-not $script:AzureEndpoints) {
-            $script:AzureEndpoints = Get-AzureEndpoints -EnvironmentName $script:TargetEnvironment
+        if (-not $AzureEndpoints) {
+            $AzureEndpoints = Get-AzureEndpoints -EnvironmentName $TargetEnvironment
         }
-        $armUrl = $script:AzureEndpoints.ResourceManagerUrl
+        $armUrl = $AzureEndpoints.ResourceManagerUrl
 
         # Get access token for Azure Resource Manager (uses environment-specific URL)
         $token = (Get-AzAccessToken -ResourceUrl $armUrl).Token
@@ -2564,7 +2623,7 @@ function Get-AzActualPricing {
             }
         }
 
-        $script:RunContext.Caches.ActualPricing[$cacheKey] = $allPrices
+        $Caches.ActualPricing[$cacheKey] = $allPrices
         return $allPrices
     }
     catch {
@@ -2716,7 +2775,7 @@ else {
 }
 
 # Validate regions against Azure's available regions
-$validRegions = if ($SkipRegionValidation) { $null } else { Get-ValidAzureRegions }
+$validRegions = if ($SkipRegionValidation) { $null } else { Get-ValidAzureRegions -MaxRetries $MaxRetries -AzureEndpoints $script:AzureEndpoints -Caches $script:RunContext.Caches }
 
 $invalidRegions = @()
 $validatedRegions = @()
@@ -3100,7 +3159,7 @@ if ($FetchPricing) {
 
     $actualPricingSuccess = $true
     foreach ($regionCode in $Regions) {
-        $actualPrices = Get-AzActualPricing -SubscriptionId $TargetSubIds[0] -Region $regionCode
+        $actualPrices = Get-AzActualPricing -SubscriptionId $TargetSubIds[0] -Region $regionCode -MaxRetries $MaxRetries -HoursPerMonth $HoursPerMonth -AzureEndpoints $script:AzureEndpoints -TargetEnvironment $script:TargetEnvironment -Caches $script:RunContext.Caches
         if ($actualPrices -and $actualPrices.Count -gt 0) {
             if ($actualPrices -is [array]) { $actualPrices = $actualPrices[0] }
             $script:RunContext.RegionPricing[$regionCode] = $actualPrices
@@ -3120,7 +3179,7 @@ if ($FetchPricing) {
         Write-Host "No negotiated rates found, using retail pricing..." -ForegroundColor DarkGray
         $script:RunContext.RegionPricing = @{}
         foreach ($regionCode in $Regions) {
-            $pricingResult = Get-AzVMPricing -Region $regionCode
+            $pricingResult = Get-AzVMPricing -Region $regionCode -MaxRetries $MaxRetries -HoursPerMonth $HoursPerMonth -AzureEndpoints $script:AzureEndpoints -TargetEnvironment $script:TargetEnvironment -Caches $script:RunContext.Caches
             if ($pricingResult -is [array]) { $pricingResult = $pricingResult[0] }
             $script:RunContext.RegionPricing[$regionCode] = $pricingResult
         }
@@ -3327,7 +3386,13 @@ if ($Fleet -and $Fleet.Count -gt 0) {
 #region Recommend Mode
 
 if ($Recommend) {
-    Invoke-RecommendMode -TargetSkuName $Recommend -SubscriptionData $allSubscriptionData
+    Invoke-RecommendMode -TargetSkuName $Recommend -SubscriptionData $allSubscriptionData `
+        -FamilyInfo $FamilyInfo -Icons $Icons -FetchPricing ([bool]$FetchPricing) `
+        -ShowSpot $ShowSpot.IsPresent -ShowPlacement $ShowPlacement.IsPresent `
+        -AllowMixedArch $AllowMixedArch.IsPresent -MinvCPU $MinvCPU -MinMemoryGB $MinMemoryGB `
+        -MinScore $MinScore -TopN $TopN -DesiredCount $DesiredCount `
+        -JsonOutput $JsonOutput.IsPresent -MaxRetries $MaxRetries `
+        -RunContext $script:RunContext -OutputWidth $script:OutputWidth
     return
 }
 
@@ -3588,7 +3653,7 @@ if ($ShowPlacement -and $SkuFilter -and $SkuFilter.Count -gt 0) {
         Write-Warning "Placement score lookup skipped in scan mode: filtered set contains $($filteredSkuNames.Count) SKUs (limit is 5). Refine -SkuFilter to 5 or fewer SKUs."
     }
     elseif ($filteredSkuNames.Count -gt 0) {
-        $scanPlacementScores = Get-PlacementScores -SkuNames $filteredSkuNames -Regions $Regions -DesiredCount $DesiredCount
+        $scanPlacementScores = Get-PlacementScores -SkuNames $filteredSkuNames -Regions $Regions -DesiredCount $DesiredCount -MaxRetries $MaxRetries -Caches $script:RunContext.Caches
         foreach ($detail in $familyDetails) {
             $allocKey = "{0}|{1}" -f $detail.SKU, $detail.Region.ToLower()
             $allocValue = if ($scanPlacementScores.ContainsKey($allocKey)) { [string]$scanPlacementScores[$allocKey].Score } else { 'N/A' }
@@ -3816,7 +3881,13 @@ if (-not $NoPrompt -and -not $Recommend) {
             if ($recommendSku -notmatch '^Standard_') {
                 $recommendSku = "Standard_$recommendSku"
             }
-            Invoke-RecommendMode -TargetSkuName $recommendSku -SubscriptionData $allSubscriptionData
+            Invoke-RecommendMode -TargetSkuName $recommendSku -SubscriptionData $allSubscriptionData `
+                -FamilyInfo $FamilyInfo -Icons $Icons -FetchPricing ([bool]$FetchPricing) `
+                -ShowSpot $ShowSpot.IsPresent -ShowPlacement $ShowPlacement.IsPresent `
+                -AllowMixedArch $AllowMixedArch.IsPresent -MinvCPU $MinvCPU -MinMemoryGB $MinMemoryGB `
+                -MinScore $MinScore -TopN $TopN -DesiredCount $DesiredCount `
+                -JsonOutput $JsonOutput.IsPresent -MaxRetries $MaxRetries `
+                -RunContext $script:RunContext -OutputWidth $script:OutputWidth
         }
         else {
             Write-Host "Skipping recommend mode (no SKU provided)." -ForegroundColor Yellow
@@ -3873,7 +3944,7 @@ foreach ($family in ($allFamilyStats.Keys | Sort-Object)) {
 
         if ($regionStats) {
             $status = $regionStats.Capacity
-            $icon = Get-StatusIcon $status
+            $icon = Get-StatusIcon -Status $status -Icons $Icons
             if ($status -eq 'OK') { $bestStatus = 'OK' }
             elseif ($status -match 'CONSTRAINED|PARTIAL' -and $bestStatus -ne 'OK') { $bestStatus = 'MIXED' }
             $line += " | " + $icon.PadRight($colWidth)
