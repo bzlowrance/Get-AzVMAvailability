@@ -76,7 +76,7 @@ function Get-AzVMAvailability {
 
 .PARAMETER Environment
     Azure cloud environment override. Auto-detects from Az context if not specified.
-    Options: AzureCloud, AzureUSGovernment, AzureChinaCloud, AzureGermanCloud
+    Options: AzureCloud, AzureUSGovernment, AzureChinaCloud
 
 .PARAMETER RegionPreset
     Predefined region sets for common scenarios (e.g., USMajor, Europe, USGov).
@@ -318,7 +318,7 @@ param(
     [switch]$UseAsciiIcons,
 
     [Parameter(Mandatory = $false, HelpMessage = "Azure cloud environment (default: auto-detect from Az context)")]
-    [ValidateSet("AzureCloud", "AzureUSGovernment", "AzureChinaCloud", "AzureGermanCloud")]
+    [ValidateSet("AzureCloud", "AzureUSGovernment", "AzureChinaCloud")]
     [string]$Environment,
 
     [Parameter(Mandatory = $false, HelpMessage = "Max retry attempts for transient API errors (429, 503, timeouts)")]
@@ -1060,9 +1060,10 @@ if (-not $TargetSubIds) {
 }
 
 if (-not $Regions) {
+    $smartDefaults = Get-SmartDefaultRegions -CloudEnvironment $script:TargetEnvironment
     if ($NoPrompt) {
-        $Regions = @('eastus', 'eastus2', 'centralus')
-        Write-Host "Using default regions: $($Regions -join ', ')" -ForegroundColor Cyan
+        $Regions = $smartDefaults.Regions
+        Write-Host "Using default regions ($($smartDefaults.Source)): $($Regions -join ', ')" -ForegroundColor Cyan
     }
     else {
         Write-Host "`nSTEP 2: SELECT REGION(S)" -ForegroundColor Green
@@ -1070,7 +1071,7 @@ if (-not $Regions) {
         Write-Host ""
         Write-Host "FAST PATH: Type region codes now to skip the long list (comma/space separated)" -ForegroundColor Yellow
         Write-Host "Examples: eastus eastus2 westus3  |  Press Enter to show full menu" -ForegroundColor DarkGray
-        Write-Host "Press Enter for defaults: eastus, eastus2, centralus" -ForegroundColor DarkGray
+        Write-Host "Press Enter for defaults: $($smartDefaults.Regions -join ', ')" -ForegroundColor DarkGray
         $quickRegions = Read-Host "Enter region codes or press Enter to load the menu"
 
         if (-not [string]::IsNullOrWhiteSpace($quickRegions)) {
@@ -1098,12 +1099,12 @@ if (-not $Regions) {
             Write-Host "INSTRUCTIONS:" -ForegroundColor Yellow
             Write-Host "  - Enter number(s) separated by commas (e.g., '1,5,10')" -ForegroundColor White
             Write-Host "  - Or use spaces (e.g., '1 5 10')" -ForegroundColor White
-            Write-Host "  - Press Enter for defaults: eastus, eastus2, centralus" -ForegroundColor White
+            Write-Host "  - Press Enter for defaults: $($smartDefaults.Regions -join ', ')" -ForegroundColor White
             Write-Host ""
             $regionsInput = Read-Host "Select region(s)"
 
             if ([string]::IsNullOrWhiteSpace($regionsInput)) {
-                $Regions = @('eastus', 'eastus2', 'centralus')
+                $Regions = $smartDefaults.Regions
                 Write-Host "`nSelected regions (default): $($Regions -join ', ')" -ForegroundColor Green
             }
             else {
@@ -3525,7 +3526,6 @@ $quotaPortalUrl = if ($script:AzureEndpoints -and $script:AzureEndpoints.Environ
     switch ($script:AzureEndpoints.EnvironmentName) {
         'AzureUSGovernment' { 'https://portal.azure.us/#view/Microsoft_Azure_Capacity/QuotaMenuBlade/~/myQuotas' }
         'AzureChinaCloud' { 'https://portal.azure.cn/#view/Microsoft_Azure_Capacity/QuotaMenuBlade/~/myQuotas' }
-        'AzureGermanCloud' { 'https://portal.microsoftazure.de/#view/Microsoft_Azure_Capacity/QuotaMenuBlade/~/myQuotas' }
         default { 'https://portal.azure.com/#view/Microsoft_Azure_Capacity/QuotaMenuBlade/~/myQuotas' }
     }
 }
