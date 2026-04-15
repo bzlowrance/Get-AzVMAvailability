@@ -48,6 +48,7 @@ $referrersPath = Join-Path $InputDir 'referrers.csv'
 $pathsPath     = Join-Path $InputDir 'paths.csv'
 $repoStatsPath = Join-Path $InputDir 'repo-stats.csv'
 $releaseDownloadsPath = Join-Path $InputDir 'release-downloads.csv'
+$releasesPath = Join-Path $InputDir 'releases.csv'
 $psGalleryPath = Join-Path $InputDir 'psgallery-downloads.csv'
 
 $views     = @(if (Test-Path $viewsPath)     { Import-Csv $viewsPath     | Sort-Object Date })
@@ -55,6 +56,9 @@ $clones    = @(if (Test-Path $clonesPath)    { Import-Csv $clonesPath    | Sort-
 $stars     = @(if (Test-Path $starsPath)     { Import-Csv $starsPath     | Sort-Object Date })
 $repoStats = @(if (Test-Path $repoStatsPath) { Import-Csv $repoStatsPath | Sort-Object Date })
 $releaseDownloads = @(if (Test-Path $releaseDownloadsPath) { Import-Csv $releaseDownloadsPath | Sort-Object Date })
+
+# Individual release tags with publish dates (for chart annotations)
+$releases = @(if (Test-Path $releasesPath) { Import-Csv $releasesPath | Sort-Object PublishedDate })
 
 # PSGallery: one row per date (prefer IsLatestVersion=true)
 $psGalleryRaw = @(if (Test-Path $psGalleryPath) { Import-Csv $psGalleryPath | Sort-Object Date })
@@ -82,7 +86,7 @@ if (Test-Path $pathsPath) {
     $paths = @($allPaths | Where-Object { $_.CollectedDate -eq $latestDate } | Sort-Object { [int]$_.TotalViews } -Descending | Select-Object -First 10)
 }
 
-Write-Host "Loaded: $($views.Count) view days, $($clones.Count) clone days, $($stars.Count) stars, $($referrers.Count) referrers, $($paths.Count) paths, $(@($releaseDownloads).Count) release download snapshots, $($psGallery.Count) PSGallery snapshots" -ForegroundColor Cyan
+Write-Host "Loaded: $($views.Count) view days, $($clones.Count) clone days, $($stars.Count) stars, $($referrers.Count) referrers, $($paths.Count) paths, $(@($releaseDownloads).Count) release download snapshots, $($releases.Count) releases, $($psGallery.Count) PSGallery snapshots" -ForegroundColor Cyan
 #endregion
 
 #region Build JSON — use @() to guarantee arrays for ConvertTo-Json
@@ -101,24 +105,14 @@ $starUsers      = @($stars | ForEach-Object { $_.User })               | Convert
 $psGalleryDates   = @($psGallery | ForEach-Object { $_.Date })                | ConvertTo-Json -Compress -AsArray
 $psGalleryTotalDl = @($psGallery | ForEach-Object { [long]$_.TotalDownloads })| ConvertTo-Json -Compress -AsArray
 
-# Detect version transitions (where Version changes between consecutive dates)
-$psGalleryVersionChanges = @()
-for ($i = 1; $i -lt $psGallery.Count; $i++) {
-    if ($psGallery[$i].Version -ne $psGallery[$i - 1].Version) {
-        $psGalleryVersionChanges += [PSCustomObject]@{
-            date    = $psGallery[$i].Date
-            version = "v$($psGallery[$i].Version)"
-        }
+# Build release annotations from actual GitHub release publish dates
+$releaseAnnotations = @($releases | ForEach-Object {
+    [PSCustomObject]@{
+        date    = $_.PublishedDate
+        version = $_.TagName
     }
-}
-# Include the first version as an annotation too
-if ($psGallery.Count -gt 0) {
-    $psGalleryVersionChanges = @([PSCustomObject]@{
-        date    = $psGallery[0].Date
-        version = "v$($psGallery[0].Version)"
-    }) + $psGalleryVersionChanges
-}
-$psGalleryVersionsJson = $psGalleryVersionChanges | ConvertTo-Json -Compress -AsArray
+})
+$releasesJson = $releaseAnnotations | ConvertTo-Json -Compress -AsArray
 
 $refLabels  = @($referrers | ForEach-Object { $_.Referrer })           | ConvertTo-Json -Compress -AsArray
 $refViews   = @($referrers | ForEach-Object { [int]$_.TotalViews })    | ConvertTo-Json -Compress -AsArray
@@ -237,7 +231,7 @@ $html = @'
 
   .page {
     position: relative; z-index: 1;
-    max-width: 1400px; margin: 0 auto; padding: 0 32px 48px;
+    max-width: 1800px; margin: 0 auto; padding: 0 32px 48px;
   }
 
   /* Header */
@@ -415,6 +409,7 @@ $html = @'
     transition: background 0.15s, border-color 0.15s;
   }
   .range-btn:hover { background: var(--surface-raised); border-color: rgba(255,255,255,0.12); }
+  .range-btn.active-toggle { background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.4); color: #60a5fa; }
   .range-btn .cal-icon { font-size: 14px; }
   .range-btn .arrow { font-size: 10px; color: var(--text-3); }
   .range-menu {
@@ -666,6 +661,10 @@ $html += @'
         <div class="range-opt active" data-days="0" onclick="setRange(0, this)">All Time <span class="check">&#x2713;</span></div>
       </div>
     </div>
+    <button class="range-btn" id="releaseToggle" onclick="toggleReleases()" title="Show/hide release version lines on charts">
+      <span>&#x1F3F7;&#xFE0F;</span>
+      <span id="releaseToggleLabel">Releases</span>
+    </button>
   </div>
 '@
 
@@ -737,7 +736,8 @@ var allData = {
   views:  { dates: $viewDates, total: $viewTotals, unique: $viewUniques },
   clones: { dates: $cloneDates, total: $cloneTotals, unique: $cloneUniques },
   stars:  { dates: $starDates, cumulative: $starCumulative, users: $starUsers },
-  psGallery: { dates: $psGalleryDates, totalDl: $psGalleryTotalDl, versions: $psGalleryVersionsJson }
+  psGallery: { dates: $psGalleryDates, totalDl: $psGalleryTotalDl },
+  releases: $releasesJson
 };
 var refData = { labels: $refLabels, views: $refViews, uniques: $refUniques };
 var pathData = { labels: $pathLabels, views: $pathViews };
