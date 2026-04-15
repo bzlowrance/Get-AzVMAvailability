@@ -126,7 +126,7 @@ function Get-AzVMAvailability {
     Name:           Get-AzVMAvailability
     Author:         Zachary Luz
     Created:        2026-01-21
-    Version:        2.1.0
+    Version:        2.1.1
     License:        MIT
     Repository:     https://github.com/zacharyluz/Get-AzVMAvailability
 
@@ -3211,9 +3211,32 @@ if ($JsonOutput) {
 
 # Emit structured objects to pipeline only when console stdout is redirected (e.g., > file.txt or Start-Transcript).
 # [Console]::IsOutputRedirected detects console-level redirection only — it does NOT detect PS pipeline usage.
-# For interactive pipeline scenarios, use -JsonOutput. A dedicated -PassThru switch is planned for v2.0.
+# For interactive pipeline scenarios, use -JsonOutput. A dedicated -PassThru switch is planned for a future version.
 if (-not $JsonOutput -and $familyDetails.Count -gt 0 -and [Console]::IsOutputRedirected) {
+    Write-Verbose "Pipeline emit: outputting $($familyDetails.Count) detail objects (stdout is redirected)"
+    Write-Verbose "  If this output is unexpected, use -JsonOutput for structured data or run without redirection for console-only display."
     $familyDetails
+}
+elseif (-not $JsonOutput -and $familyDetails.Count -gt 0 -and -not [Console]::IsOutputRedirected) {
+    # Detect common capture patterns that WON'T trigger IsOutputRedirected but users expect to capture data.
+    # Only inspect call stack when this command is actually in a pipeline (PipelineLength > 1).
+    # Show tip once per session to avoid noise on repeated runs.
+    if ($MyInvocation.PipelineLength -gt 1 -and -not $script:PipelineTipShown) {
+        $callStack = Get-PSCallStack
+        $pipelineCmdlets = @('Tee-Object', 'ForEach-Object', 'Select-Object', 'Where-Object', 'Out-File', 'Export-Csv', 'ConvertTo-Json', 'ConvertTo-Csv', 'Sort-Object', 'Group-Object', 'Measure-Object')
+        $capturePatterns = $callStack | Where-Object { $_.Command -in $pipelineCmdlets }
+        if ($capturePatterns) {
+            $script:PipelineTipShown = $true
+            Write-Host ''
+            Write-Host '  TIP: Pipeline capture detected but no objects were emitted.' -ForegroundColor Yellow
+            Write-Host '  Get-AzVMAvailability outputs colored tables to the console by default.' -ForegroundColor Yellow
+            Write-Host '  To get structured data for pipeline processing, use one of:' -ForegroundColor DarkGray
+            Write-Host '    -JsonOutput              → JSON string (recommended for automation)' -ForegroundColor DarkGray
+            Write-Host '    > output.txt             → stdout redirection; triggers automatic object emit' -ForegroundColor DarkGray
+            Write-Host '    -AutoExport -ExportPath . → CSV/XLSX file export' -ForegroundColor DarkGray
+            Write-Host ''
+        }
+    }
 }
 
 #region Drill-Down (if enabled)
