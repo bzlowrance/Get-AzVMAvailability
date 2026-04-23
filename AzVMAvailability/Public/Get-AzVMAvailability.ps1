@@ -1163,14 +1163,15 @@ else {
 }
 
 # Validate regions against Azure's available regions
-$validRegions = if ($SkipRegionValidation) { $null } else { Get-ValidAzureRegions -MaxRetries $MaxRetries -AzureEndpoints $script:AzureEndpoints -Caches $script:RunContext.Caches }
+# LifecycleRecommendations: regions came from ARG (already valid), skip validation
+$validRegions = if ($SkipRegionValidation -or $LifecycleRecommendations) { $null } else { Get-ValidAzureRegions -MaxRetries $MaxRetries -AzureEndpoints $script:AzureEndpoints -Caches $script:RunContext.Caches }
 
 $invalidRegions = @()
 $validatedRegions = @()
 
 # If region validation is skipped or failed entirely
-if ($SkipRegionValidation) {
-    Write-Warning "Region validation explicitly skipped via -SkipRegionValidation."
+if ($SkipRegionValidation -or $LifecycleRecommendations) {
+    if ($SkipRegionValidation) { Write-Warning "Region validation explicitly skipped via -SkipRegionValidation." }
     $validatedRegions = $Regions
 }
 elseif ($null -eq $validRegions -or $validRegions.Count -eq 0) {

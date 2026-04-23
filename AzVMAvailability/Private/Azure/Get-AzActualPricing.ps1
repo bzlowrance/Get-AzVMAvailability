@@ -148,6 +148,8 @@ function Get-AzActualPricing {
         $firstVmPage = 0         # Track page distribution of VM meters
         $lastVmPage = 0
         $vmMetersPerPage = @{}   # page number → VM meter count on that page
+        $savedProgressPref = $ProgressPreference
+        $ProgressPreference = 'Continue'  # Restore progress bar (suppressed globally for Invoke-RestMethod noise)
         $scanStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         do {
             $pageCount++
@@ -246,6 +248,7 @@ function Get-AzActualPricing {
             $tier1Success = $true
             $scanStopwatch.Stop()
             Write-Progress -Activity "Downloading discounted pricing data" -Completed
+            $ProgressPreference = $savedProgressPref
             $scanDuration = $scanStopwatch.Elapsed
             $scanDurationStr = '{0:mm\:ss}' -f $scanDuration
             # Cache the full scan — all subsequent calls for any region are served from here
@@ -288,6 +291,7 @@ function Get-AzActualPricing {
         }
         else {
             Write-Progress -Activity "Downloading discounted pricing data" -Completed
+            $ProgressPreference = $savedProgressPref
             $scanStopwatch.Stop()
             Write-Host "  Tier 1 (Price Sheet): no VM matches ($totalItems items across $pageCount pages). Trying Tier 2..." -ForegroundColor DarkGray
             Write-Verbose "Tier 1 (Price Sheet): $totalItems items across $pageCount page(s), 0 VM matches. Falling through to Tier 2."
@@ -295,6 +299,7 @@ function Get-AzActualPricing {
     }
     catch {
         Write-Progress -Activity "Downloading discounted pricing data" -Completed
+        $ProgressPreference = $savedProgressPref
         $psError = $_
         $psStatus = $null
         if ($psError.Exception.Response) { $psStatus = [int]$psError.Exception.Response.StatusCode }
