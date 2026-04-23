@@ -1045,7 +1045,7 @@ $script:RunContext.AzureEndpoints = $script:AzureEndpoints
 # Prompt user for subscription(s) if not provided via parameters
 
 if (-not $TargetSubIds) {
-    if ($NoPrompt) {
+    if ($NoPrompt -or $LifecycleRecommendations) {
         $ctx = Get-AzContext -ErrorAction SilentlyContinue
         if ($ctx -and $ctx.Subscription.Id) {
             $TargetSubIds = @($ctx.Subscription.Id)
@@ -1083,7 +1083,7 @@ if (-not $TargetSubIds) {
 
 if (-not $Regions) {
     $smartDefaults = Get-SmartDefaultRegions -CloudEnvironment $script:TargetEnvironment
-    if ($NoPrompt) {
+    if ($NoPrompt -or $LifecycleRecommendations) {
         $Regions = $smartDefaults.Regions
         Write-Host "Using default regions ($($smartDefaults.Source)): $($Regions -join ', ')" -ForegroundColor Cyan
     }
