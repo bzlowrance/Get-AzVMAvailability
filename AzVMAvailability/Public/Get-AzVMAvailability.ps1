@@ -1254,14 +1254,14 @@ if ($Regions.Count -gt $maxRegions -and -not $lifecycleEntries) {
 }
 
 # Drill-down prompt
-if (-not $NoPrompt -and -not $EnableDrill) {
+if (-not $NoPrompt -and -not $LifecycleRecommendations -and -not $EnableDrill) {
     Write-Host "`nDrill down into specific families/SKUs? (y/N): " -ForegroundColor Yellow -NoNewline
     $drillInput = Read-Host
     if ($drillInput -match '^y(es)?$') { $EnableDrill = $true }
 }
 
 # Export prompt
-if (-not $ExportPath -and -not $NoPrompt -and -not $AutoExport) {
+if (-not $ExportPath -and -not $NoPrompt -and -not $LifecycleRecommendations -and -not $AutoExport) {
     Write-Host "`nExport results to file? (y/N): " -ForegroundColor Yellow -NoNewline
     $exportInput = Read-Host
     if ($exportInput -match '^y(es)?$') {
@@ -1273,14 +1273,14 @@ if (-not $ExportPath -and -not $NoPrompt -and -not $AutoExport) {
 
 # Pricing prompt
 $FetchPricing = $ShowPricing.IsPresent
-if (-not $ShowPricing -and -not $NoPrompt) {
-    Write-Host "`nInclude estimated pricing? (adds ~5-10 sec) (y/N): " -ForegroundColor Yellow -NoNewline
+if (-not $ShowPricing -and -not $NoPrompt -and -not $LifecycleRecommendations) {
+    Write-Host "`nInclude estimated pricing? (first run downloads the price sheet, ~15-20 min; cached afterwards) (y/N): " -ForegroundColor Yellow -NoNewline
     $pricingInput = Read-Host
     if ($pricingInput -match '^y(es)?$') { $FetchPricing = $true }
 }
 
 # Placement score prompt — fires independently (useful without pricing)
-if (-not $ShowPlacement -and -not $NoPrompt) {
+if (-not $ShowPlacement -and -not $NoPrompt -and -not $LifecycleRecommendations) {
     Write-Host "`nShow allocation likelihood scores? (High/Medium/Low per SKU) (y/N): " -ForegroundColor Yellow -NoNewline
     $placementInput = Read-Host
     if ($placementInput -match '^y(es)?$') { $ShowPlacement = [switch]::new($true) }
@@ -1288,14 +1288,14 @@ if (-not $ShowPlacement -and -not $NoPrompt) {
 $script:RunContext.ShowPlacement = $ShowPlacement.IsPresent
 
 # Spot pricing prompt — only useful if pricing is enabled
-if (-not $ShowSpot -and -not $NoPrompt -and $FetchPricing) {
+if (-not $ShowSpot -and -not $NoPrompt -and -not $LifecycleRecommendations -and $FetchPricing) {
     Write-Host "`nInclude Spot VM pricing alongside regular pricing? (y/N): " -ForegroundColor Yellow -NoNewline
     $spotInput = Read-Host
     if ($spotInput -match '^y(es)?$') { $ShowSpot = [switch]::new($true) }
 }
 
 # Image compatibility prompt
-if (-not $ImageURN -and -not $NoPrompt) {
+if (-not $ImageURN -and -not $NoPrompt -and -not $LifecycleRecommendations) {
     Write-Host "`nCheck SKU compatibility with a specific VM image? (y/N): " -ForegroundColor Yellow -NoNewline
     $imageInput = Read-Host
     if ($imageInput -match '^y(es)?$') {
