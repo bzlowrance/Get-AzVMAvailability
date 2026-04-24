@@ -176,8 +176,8 @@ param(
     [Parameter(Mandatory = $false, HelpMessage = "Add a 'Resource Group Map' sheet to the lifecycle XLSX.")]
     [switch]$RGMap,
 
-    [Parameter(Mandatory = $false, HelpMessage = "Path to a log file for capturing terminal output. If a directory is specified, a timestamped log file is created. If omitted, no log is written.")]
-    [string]$LogFile
+    [Parameter(Mandatory = $false, HelpMessage = "Enable transcript logging. A timestamped log file is created in the export directory.")]
+    [switch]$LogFile
 )
 
 # Version for Validate-Script.ps1 parity check (must match .psd1 ModuleVersion)

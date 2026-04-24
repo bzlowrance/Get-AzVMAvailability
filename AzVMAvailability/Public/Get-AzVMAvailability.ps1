@@ -398,8 +398,8 @@ param(
     [Parameter(Mandatory = $false, HelpMessage = "Add a 'Resource Group Map' sheet to the lifecycle XLSX showing VM counts grouped by resource group, subscription, region, and SKU. Requires -LifecycleScan.")]
     [switch]$RGMap,
 
-    [Parameter(Mandatory = $false, HelpMessage = "Path to a log file for capturing terminal output. If a directory is specified, a timestamped log file is created. If omitted, no log is written.")]
-    [string]$LogFile
+    [Parameter(Mandatory = $false, HelpMessage = "Enable transcript logging. A timestamped log file is created in the export directory.")]
+    [switch]$LogFile
 )
 
     # Set console suppression for this invocation (module-scope flag)
@@ -1533,25 +1533,18 @@ if ($ExportPath -and -not (Test-Path $ExportPath)) {
     Write-Host "Created: $ExportPath" -ForegroundColor Green
 }
 
-# Start transcript logging if -LogFile was specified
-if ($LogFile -or $VerbosePreference -eq 'Continue') {
-    if (-not $LogFile) {
-        $logDir = if ($ExportPath) { $ExportPath } else { $PWD.Path }
-        $logTimestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-        $LogFile = Join-Path $logDir "AzVMAvailability_${logTimestamp}.log"
-    }
-    elseif (Test-Path -LiteralPath $LogFile -PathType Container) {
-        $logTimestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-        $LogFile = Join-Path $LogFile "AzVMAvailability_${logTimestamp}.log"
-    }
+# Start transcript logging (opt-in via -LogFile)
+if ($LogFile) {
+    $logDir = if ($ExportPath) { $ExportPath } else { $PWD.Path }
+    $logTimestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $logFilePath = Join-Path $logDir "AzVMAvailability_${logTimestamp}.log"
     try {
-        $logFileDir = Split-Path -Path $LogFile -Parent
-        if ($logFileDir -and -not (Test-Path -LiteralPath $logFileDir)) {
-            New-Item -Path $logFileDir -ItemType Directory -Force | Out-Null
+        if (-not (Test-Path -LiteralPath $logDir)) {
+            New-Item -Path $logDir -ItemType Directory -Force | Out-Null
         }
-        Start-Transcript -Path $LogFile -Append | Out-Null
+        Start-Transcript -Path $logFilePath -Append | Out-Null
         $script:TranscriptStarted = $true
-        Write-Host "Logging to: $LogFile" -ForegroundColor DarkGray
+        Write-Host "Logging to: $logFilePath" -ForegroundColor DarkGray
     }
     catch {
         Write-Warning "Failed to start transcript logging: $($_.Exception.Message)"
