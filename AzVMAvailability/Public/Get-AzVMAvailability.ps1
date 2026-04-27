@@ -997,6 +997,24 @@ if ($Environment) {
     $script:TargetEnvironment = $Environment
 }
 
+# Auto-detect target environment from current Az context if still unset.
+# Without this, users who pass -Region usgov*/china* directly (without -RegionPreset or -Environment)
+# would have $script:TargetEnvironment empty, causing sovereign-cloud column gates (e.g. SP suppression)
+# to fail and cloud-specific endpoints to fall back to public Azure.
+if (-not $script:TargetEnvironment) {
+    try {
+        $autoCtx = Get-AzContext -ErrorAction SilentlyContinue
+        if ($autoCtx -and $autoCtx.Environment -and $autoCtx.Environment.Name) {
+            $script:TargetEnvironment = $autoCtx.Environment.Name
+            Write-Verbose "Auto-detected environment from Az context: $($script:TargetEnvironment)"
+        }
+        else {
+            $script:TargetEnvironment = 'AzureCloud'
+        }
+    }
+    catch { $script:TargetEnvironment = 'AzureCloud' }
+}
+
 # Detect execution environment (Azure Cloud Shell vs local)
 $isCloudShell = $env:CLOUD_SHELL -eq "true" -or (Test-Path "/home/system" -ErrorAction SilentlyContinue)
 $defaultExportPath = if ($isCloudShell) { "/home/system" } else { "C:\Temp\AzVMAvailability" }
@@ -2594,12 +2612,26 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
 
                     # Compute CPU, memory, and disk deltas
                     $isUnscannedUpgrade = ($rec.capacity -eq 'Not scanned')
-                    # Resolve ACU for this alternative — upgrade-path recs carry it; weighted recs need SKU index lookup
+                    # Resolve ACU for this alternative — upgrade-path recs carry it; weighted recs need SKU index lookup.
+                    # ACU is a SKU capability and region-invariant, so fall back to ANY scanned region for the SKU
+                    # if the deployed region didn't return it (common when the candidate isn't offered in the deployed region).
+                    $resolveAcuFromIndex = {
+                        param($skuName)
+                        if (-not $skuName) { return $null }
+                        $hit = $lcSkuIndex["$skuName|$deployedRegion"]
+                        if (-not $hit) {
+                            foreach ($k in $lcSkuIndex.Keys) {
+                                if ($k -like "$skuName|*") { $hit = $lcSkuIndex[$k]; break }
+                            }
+                        }
+                        return $hit
+                    }
                     $recACU = if ($rec.PSObject.Properties['ACU']) { [int]$rec.ACU } else {
-                        $acuRaw = $lcSkuIndex["$($rec.sku)|$($deployedRegion)"]
+                        $acuRaw = & $resolveAcuFromIndex $rec.sku
                         if ($acuRaw) { [int](Get-CapValue $acuRaw 'ACUs') } else { 0 }
                     }
-                    $targetACU = [int](Get-CapValue ($lcSkuIndex["$($target.Name)|$($deployedRegion)"]) 'ACUs')
+                    $targetAcuRaw = & $resolveAcuFromIndex $target.Name
+                    $targetACU = [int](Get-CapValue $targetAcuRaw 'ACUs')
 
                     if ($isUnscannedUpgrade) {
                         $cpuDiff = 0; $cpuDeltaStr = '-'
@@ -2857,11 +2889,18 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                 ) + $rateOptCols
             } else { @() }
 
-            # Lifecycle Summary: quota columns moved to SubMap/RGMap tabs
+            # Lifecycle Summary: quota columns moved to SubMap/RGMap tabs.
+            # Per-sub quota text ("Quota: need NxNvCPU") is also stripped from Risk Reasons here
+            # because the Summary aggregates across subs; per-sub quota is surfaced on SubMap/RGMap tabs.
+            $stripQuotaReasons = {
+                $raw = [string]$_.RiskReasons
+                if (-not $raw) { return '' }
+                ($raw -split '\s*;\s*' | Where-Object { $_ -and $_ -notmatch '^Quota:\s*need\b' }) -join '; '
+            }
             $lcProps = @(
                 @{N='SKU';E={$_.SKU}}, @{N='Region';E={$_.DeployedRegion}}, @{N='Qty';E={$_.Qty}},
                 @{N='vCPU';E={$_.vCPU}}, @{N='Memory (GB)';E={$_.MemoryGB}}, @{N='Generation';E={$_.Generation}},
-                @{N='Risk Level';E={$_.RiskLevel}}, @{N='Risk Reasons';E={$_.RiskReasons}},
+                @{N='Risk Level';E={$_.RiskLevel}}, @{N='Risk Reasons';E=$stripQuotaReasons},
                 @{N='Match Type';E={$_.MatchType}}, @{N='Alternative';E={$_.TopAlternative}}, @{N='Alt Score';E={$_.AltScore}},
                 @{N='CPU +/-';E={$_.CpuDelta}}, @{N='ACU +/-';E={$_.AcuDelta}}, @{N='Mem +/-';E={$_.MemDelta}},
                 @{N='Disk +/-';E={$_.DiskDelta}}, @{N='IOPS +/-';E={$_.IopsDelta}}
@@ -2967,7 +3006,7 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
             $hrProps = @(
                 @{N='SKU';E={$_.SKU}}, @{N='Region';E={$_.DeployedRegion}}, @{N='Qty';E={$_.Qty}},
                 @{N='vCPU';E={$_.vCPU}}, @{N='Memory (GB)';E={$_.MemoryGB}}, @{N='Generation';E={$_.Generation}},
-                @{N='Risk Reasons';E={$_.RiskReasons}},
+                @{N='Risk Reasons';E=$stripQuotaReasons},
                 @{N='Match Type';E={$_.MatchType}}, @{N='Alternative';E={$_.TopAlternative}}, @{N='Alt Score';E={$_.AltScore}},
                 @{N='CPU +/-';E={$_.CpuDelta}}, @{N='ACU +/-';E={$_.AcuDelta}}, @{N='Mem +/-';E={$_.MemDelta}},
                 @{N='Disk +/-';E={$_.DiskDelta}}, @{N='IOPS +/-';E={$_.IopsDelta}}
@@ -2997,7 +3036,7 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
             $mrProps = @(
                 @{N='SKU';E={$_.SKU}}, @{N='Region';E={$_.DeployedRegion}}, @{N='Qty';E={$_.Qty}},
                 @{N='vCPU';E={$_.vCPU}}, @{N='Memory (GB)';E={$_.MemoryGB}}, @{N='Generation';E={$_.Generation}},
-                @{N='Risk Reasons';E={$_.RiskReasons}},
+                @{N='Risk Reasons';E=$stripQuotaReasons},
                 @{N='Match Type';E={$_.MatchType}}, @{N='Alternative';E={$_.TopAlternative}}, @{N='Alt Score';E={$_.AltScore}},
                 @{N='CPU +/-';E={$_.CpuDelta}}, @{N='ACU +/-';E={$_.AcuDelta}}, @{N='Mem +/-';E={$_.MemDelta}},
                 @{N='Disk +/-';E={$_.DiskDelta}}, @{N='IOPS +/-';E={$_.IopsDelta}}
