@@ -39,13 +39,23 @@ function Get-AzActualPricing {
     $armLocation = $Region.ToLower() -replace '\s', ''
 
     # Price Sheet meterLocation uses abbreviated names for gov/sovereign regions
-    # that don't match ARM region names. This map provides fallback lookups.
+    # that don't match ARM region names. Each ARM key maps to an *ordered list* of
+    # candidate meterLocation keys (after normalization: lowercased, spaces/hyphens
+    # stripped). The first candidate present in the cache wins. Order reflects the
+    # most-specific name first, falling back to legacy/primary region names.
+    #
+    # Examples of meterLocation values seen in EA price sheets (normalized form):
+    #   'US Gov Virginia' -> 'usgovvirginia' (modern, region-specific)
+    #   'US Gov VA'       -> 'usgovva'       (abbreviated)
+    #   'US Gov'          -> 'usgov'         (legacy: Virginia as primary region)
+    #   'US Gov Arizona'  -> 'usgovarizona'  | 'US Gov AZ' -> 'usgovaz'
+    #   'US Gov Texas'    -> 'usgovtexas'    | 'US Gov TX' -> 'usgovtx'
     $armToMeterLocation = @{
-        'usgovarizona'  = 'usgovaz'
-        'usgovtexas'    = 'usgovtx'
-        'usgovvirginia' = 'usgov'
-        'usdodcentral'  = 'usdod'
-        'usdodeast'     = 'usdod'
+        'usgovarizona'  = @('usgovarizona', 'usgovaz')
+        'usgovtexas'    = @('usgovtexas', 'usgovtx')
+        'usgovvirginia' = @('usgovvirginia', 'usgovva', 'usgov')
+        'usdodcentral'  = @('usdodcentral', 'usdodc', 'usdod')
+        'usdodeast'     = @('usdodeast', 'usdode', 'usdod')
     }
 
     # ── Disk cache ──
@@ -59,23 +69,36 @@ function Get-AzActualPricing {
     $cacheDir = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
     $cacheFile = Join-Path $cacheDir "AzVMLifecycle-PriceSheet-$cacheKey.json"
 
+    # Helper: resolve an ARM region to the first matching cached meterLocation key.
+    # Order: exact ARM name first, then each alias candidate from $armToMeterLocation.
+    $resolvePriceSheetKey = {
+        param($arn, $cache)
+        if ($cache.ContainsKey($arn)) { return $arn }
+        if ($armToMeterLocation.ContainsKey($arn)) {
+            foreach ($cand in @($armToMeterLocation[$arn])) {
+                if ($cache.ContainsKey($cand) -and $cache[$cand] -and $cache[$cand].Count -gt 0) { return $cand }
+            }
+        }
+        return $null
+    }
+
     # EA/MCA negotiated rates are set at the enrollment level — identical across
     # all subscriptions. Page through the Price Sheet once, group all Linux VM
     # meters by meterLocation, and serve every subsequent region from cache.
     if ($Caches.ActualPricing.ContainsKey('AllRegions')) {
         $allRegionPrices = $Caches.ActualPricing['AllRegions']
-        $lookupKey = if ($allRegionPrices.ContainsKey($armLocation)) { $armLocation }
-                     elseif ($armToMeterLocation.ContainsKey($armLocation)) { $armToMeterLocation[$armLocation] }
-                     else { $null }
+        $lookupKey = & $resolvePriceSheetKey $armLocation $allRegionPrices
         $regionPrices = if ($lookupKey) { $allRegionPrices[$lookupKey] } else { @{} }
         if ($regionPrices.Count -gt 0) {
-            Write-Host "  Tier 1 (Price Sheet): $($regionPrices.Count) negotiated SKU prices for '$Region' (cached)" -ForegroundColor DarkGray
+            $aliasSuffix = if ($lookupKey -ne $armLocation) { " (alias → '$lookupKey')" } else { '' }
+            Write-Host "  Tier 1 (Price Sheet): $($regionPrices.Count) negotiated SKU prices for '$Region'$aliasSuffix (cached)" -ForegroundColor DarkGray
         }
         else {
-            $govKeys = @($allRegionPrices.Keys | Where-Object { $_ -match 'gov|dod|china|german' } | Sort-Object)
-            if ($govKeys.Count -gt 0) {
-                Write-Verbose "Pricing lookup miss for '$armLocation'. Sovereign keys in cache: $($govKeys -join ', ')"
-            }
+            $govKeys = @($allRegionPrices.Keys | Where-Object { $_ -match 'gov|dod|china|german|virginia|arizona|texas' } | Sort-Object)
+            $candList = if ($armToMeterLocation.ContainsKey($armLocation)) { @($armToMeterLocation[$armLocation]) -join "', '" } else { '' }
+            $aliasNote = if ($candList) { " (tried '$candList')" } else { '' }
+            $hint = if ($govKeys.Count -gt 0) { " Sovereign keys present in cache: $($govKeys -join ', ')." } else { ' No sovereign keys present in cache.' }
+            Write-Host "  Tier 1 (Price Sheet): no negotiated rates for '$Region'$aliasNote — falling back to retail.$hint" -ForegroundColor DarkYellow
         }
         return $regionPrices
     }
@@ -91,28 +114,36 @@ function Get-AzActualPricing {
                 $allRegionPrices = Get-Content $cacheFile -Raw | ConvertFrom-Json -AsHashtable
 
                 # Resolve sovereign region pricing — meterLocation abbreviations differ from ARM names.
-                # Create direct ARM-name entries so lookups never need the fallback map.
+                # For each ARM region, walk the candidate list and create a direct entry under the
+                # ARM name pointing at the first non-empty cache bucket found.
+                $aliasSummary = [System.Collections.Generic.List[string]]::new()
                 foreach ($arnKey in $armToMeterLocation.Keys) {
-                    $mtrKey = $armToMeterLocation[$arnKey]
-                    if ($allRegionPrices.ContainsKey($mtrKey) -and -not $allRegionPrices.ContainsKey($arnKey)) {
-                        $allRegionPrices[$arnKey] = $allRegionPrices[$mtrKey]
-                        Write-Verbose "Pricing alias: '$arnKey' -> '$mtrKey' ($($allRegionPrices[$mtrKey].Count) SKUs)"
+                    if ($allRegionPrices.ContainsKey($arnKey) -and $allRegionPrices[$arnKey].Count -gt 0) { continue }
+                    foreach ($cand in @($armToMeterLocation[$arnKey])) {
+                        if ($cand -eq $arnKey) { continue }
+                        if ($allRegionPrices.ContainsKey($cand) -and $allRegionPrices[$cand] -and $allRegionPrices[$cand].Count -gt 0) {
+                            $allRegionPrices[$arnKey] = $allRegionPrices[$cand]
+                            $aliasSummary.Add("$arnKey → $cand ($($allRegionPrices[$cand].Count))") | Out-Null
+                            break
+                        }
                     }
+                }
+                if ($aliasSummary.Count -gt 0) {
+                    Write-Host "  Tier 1 (Price Sheet): sovereign aliases resolved — $($aliasSummary -join '; ')" -ForegroundColor DarkGray
                 }
 
                 $Caches.ActualPricing['AllRegions'] = $allRegionPrices
                 $totalSkus = ($allRegionPrices.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum
                 Write-Host "  Tier 1 (Price Sheet): $totalSkus negotiated SKU prices across $($allRegionPrices.Count) region(s) (from cache file)" -ForegroundColor DarkGray
 
-                $lookupKey = if ($allRegionPrices.ContainsKey($armLocation)) { $armLocation }
-                             elseif ($armToMeterLocation.ContainsKey($armLocation)) { $armToMeterLocation[$armLocation] }
-                             else { $null }
+                $lookupKey = & $resolvePriceSheetKey $armLocation $allRegionPrices
                 $regionPrices = if ($lookupKey) { $allRegionPrices[$lookupKey] } else { @{} }
-                if (-not $lookupKey -or $regionPrices.Count -eq 0) {
-                    $govKeys = @($allRegionPrices.Keys | Where-Object { $_ -match 'gov|dod|china|german' } | Sort-Object)
-                    if ($govKeys.Count -gt 0) {
-                        Write-Verbose "Pricing lookup miss for '$armLocation'. Sovereign keys in cache: $($govKeys -join ', ')"
-                    }
+                if ($regionPrices.Count -eq 0) {
+                    $govKeys = @($allRegionPrices.Keys | Where-Object { $_ -match 'gov|dod|china|german|virginia|arizona|texas' } | Sort-Object)
+                    $candList = if ($armToMeterLocation.ContainsKey($armLocation)) { @($armToMeterLocation[$armLocation]) -join "', '" } else { '' }
+                    $aliasNote = if ($candList) { " (tried '$candList')" } else { '' }
+                    $hint = if ($govKeys.Count -gt 0) { " Sovereign keys present in cache: $($govKeys -join ', ')." } else { ' No sovereign keys present in cache.' }
+                    Write-Host "  Tier 1 (Price Sheet): no negotiated rates for '$Region'$aliasNote — falling back to retail.$hint" -ForegroundColor DarkYellow
                 }
                 return $regionPrices
             }
@@ -277,13 +308,21 @@ function Get-AzActualPricing {
             $scanDuration = $scanStopwatch.Elapsed
             $scanDurationStr = '{0:mm\:ss}' -f $scanDuration
             # Resolve sovereign region pricing — meterLocation abbreviations differ from ARM names.
-            # Create direct ARM-name entries so lookups never need the fallback map.
+            # Walk each ARM region's candidate list and use the first non-empty bucket.
+            $aliasSummary = [System.Collections.Generic.List[string]]::new()
             foreach ($arnKey in $armToMeterLocation.Keys) {
-                $mtrKey = $armToMeterLocation[$arnKey]
-                if ($allRegionPrices.ContainsKey($mtrKey) -and -not $allRegionPrices.ContainsKey($arnKey)) {
-                    $allRegionPrices[$arnKey] = $allRegionPrices[$mtrKey]
-                    Write-Verbose "Pricing alias: '$arnKey' -> '$mtrKey' ($($allRegionPrices[$mtrKey].Count) SKUs)"
+                if ($allRegionPrices.ContainsKey($arnKey) -and $allRegionPrices[$arnKey].Count -gt 0) { continue }
+                foreach ($cand in @($armToMeterLocation[$arnKey])) {
+                    if ($cand -eq $arnKey) { continue }
+                    if ($allRegionPrices.ContainsKey($cand) -and $allRegionPrices[$cand] -and $allRegionPrices[$cand].Count -gt 0) {
+                        $allRegionPrices[$arnKey] = $allRegionPrices[$cand]
+                        $aliasSummary.Add("$arnKey → $cand ($($allRegionPrices[$cand].Count))") | Out-Null
+                        break
+                    }
                 }
+            }
+            if ($aliasSummary.Count -gt 0) {
+                Write-Host "  Tier 1 (Price Sheet): sovereign aliases resolved — $($aliasSummary -join '; ')" -ForegroundColor DarkGray
             }
 
             # Cache the full scan — all subsequent calls for any region are served from here
@@ -464,9 +503,7 @@ function Get-AzActualPricing {
     $headers['Authorization'] = $null
     $token = $null
 
-    $lookupKey = if ($allRegionPrices.ContainsKey($armLocation)) { $armLocation }
-                 elseif ($armToMeterLocation.ContainsKey($armLocation)) { $armToMeterLocation[$armLocation] }
-                 else { $null }
+    $lookupKey = & $resolvePriceSheetKey $armLocation $allRegionPrices
     $regionPrices = if ($lookupKey) { $allRegionPrices[$lookupKey] } else { @{} }
     return $regionPrices
 }
