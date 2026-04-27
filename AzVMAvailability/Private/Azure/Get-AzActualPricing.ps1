@@ -67,7 +67,12 @@ function Get-AzActualPricing {
     $tenantId = try { (Get-AzContext -ErrorAction SilentlyContinue).Tenant.Id } catch { $null }
     $cacheKey = if ($tenantId) { $tenantId } else { $SubscriptionId }
     $cacheDir = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
-    $cacheFile = Join-Path $cacheDir "AzVMLifecycle-PriceSheet-$cacheKey.json"
+    # Cache schema v2: filters out Spot/Low Priority meters (v1 mistakenly accepted them
+    # as Regular meters after suffix-stripping, leading to bogus low PAYG prices).
+    $cacheFile = Join-Path $cacheDir "AzVMLifecycle-PriceSheet-v2-$cacheKey.json"
+    # Best-effort cleanup of obsolete v1 cache files.
+    Get-ChildItem $cacheDir -Filter "AzVMLifecycle-PriceSheet-$cacheKey.json" -ErrorAction SilentlyContinue |
+        Remove-Item -ErrorAction SilentlyContinue
 
     # Helper: resolve an ARM region to the first matching cached meterLocation key.
     # Order: exact ARM name first, then each alias candidate from $armToMeterLocation.
@@ -214,6 +219,7 @@ function Get-AzActualPricing {
             NoMeterDetails    = 0
             NotVirtualMachine = 0
             WindowsSubcategory = 0
+            SpotOrLowPriority  = 0
             EmptyMeterLocation = 0
             UnparsableMeterName = 0
             ZeroOrNegativeUnitPrice = 0
@@ -253,14 +259,26 @@ function Get-AzActualPricing {
                     if ($md.meterCategory -ne 'Virtual Machines') { $skipReasons.NotVirtualMachine++; continue }
                     if ($md.meterSubCategory -match 'Windows') { $skipReasons.WindowsSubcategory++; continue }
 
+                    # CRITICAL: Skip non-PAYG VM meters (Spot, Low Priority).
+                    # Previous code stripped these suffixes and treated them as Regular,
+                    # causing Spot rates (~1/8 of PAYG) to be cached as negotiated PAYG
+                    # whenever the Spot meter appeared first in the price sheet pages.
+                    # meterSubCategory or meterName carry these markers; check both.
+                    $meterNameRaw = [string]$md.meterName
+                    $meterSub = [string]$md.meterSubCategory
+                    if ($meterNameRaw -match '\b(Spot|Low Priority)\b' -or
+                        $meterSub -match '\b(Spot|Low Priority)\b') {
+                        $skipReasons.SpotOrLowPriority++; continue
+                    }
+
                     # Normalize meterLocation to ARM-style key (lowercase, no spaces/hyphens)
                     $meterLoc = $md.meterLocation
                     $normalizedRegion = ($meterLoc -replace '[\s-]', '').ToLower()
                     if (-not $normalizedRegion) { $skipReasons.EmptyMeterLocation++; continue }
 
                     # Convert billing meter name to ARM SKU name
-                    $cleanName = $md.meterName -replace '\s+(Low Priority|Spot)\s*$', ''
-                    $cleanName = $cleanName.Trim() -replace '^Standard[\s_]+', ''
+                    # No longer strip Spot/Low Priority — those meters are filtered out above.
+                    $cleanName = $meterNameRaw.Trim() -replace '^Standard[\s_]+', ''
                     if ($cleanName -notmatch '^[A-Z]') { $skipReasons.UnparsableMeterName++; continue }
                     $vmSize = "Standard_$($cleanName -replace '\s+', '_')"
 
