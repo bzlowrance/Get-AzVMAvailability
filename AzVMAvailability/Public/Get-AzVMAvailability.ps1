@@ -398,6 +398,9 @@ param(
     [Parameter(Mandatory = $false, HelpMessage = "Add a 'Resource Group Map' sheet to the lifecycle XLSX showing VM counts grouped by resource group, subscription, region, and SKU. Requires -LifecycleScan.")]
     [switch]$RGMap,
 
+    [Parameter(Mandatory = $false, HelpMessage = "Add availability-zone columns to lifecycle XLSX output. On Subscription Map / Resource Group Map sheets adds 'Zones (Deployed)' showing which zones the VMs are currently deployed to. On Lifecycle Summary / High Risk / Medium Risk sheets adds 'Zones (Supported)' (between Alt Score and CPU +/-) showing which zones the recommended SKU supports in the deployed region. Requires -SubMap or -RGMap (or any lifecycle mode for the Summary column).")]
+    [switch]$AZ,
+
     [Parameter(Mandatory = $false, HelpMessage = "Enable transcript logging. A timestamped log file is created in the export directory.")]
     [switch]$LogFile
 )
@@ -566,6 +569,11 @@ if ($LifecycleRecommendations -and $LifecycleFile) {
                 }
                 $subNameProp = ($item.PSObject.Properties | Where-Object { $_.Name -match '^(SubscriptionName|Subscription_Name|SUBSCRIPTION)$' } | Select-Object -First 1).Value
                 $rgProp = ($item.PSObject.Properties | Where-Object { $_.Name -match '^(ResourceGroup|Resource_Group|RESOURCE GROUP)$' } | Select-Object -First 1).Value
+                $zoneProp = ($item.PSObject.Properties | Where-Object { $_.Name -match '^(Zone|Zones|AvailabilityZone|AvailabilityZones|AZ)$' } | Select-Object -First 1).Value
+                # Normalize zone(s) into an array of digit strings (file may have '1', '1,2', '1;2', etc.)
+                $zoneArr = if ($zoneProp) {
+                    @(([string]$zoneProp -split '[,;\s]+') | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -match '^[0-9]$' })
+                } else { @() }
                 $fileVMRows.Add([pscustomobject]@{
                     subscriptionId   = if ($subIdProp) { $subIdProp.Trim() } else { '' }
                     subscriptionName = if ($subNameProp) { $subNameProp.Trim() } else { '' }
@@ -573,6 +581,7 @@ if ($LifecycleRecommendations -and $LifecycleFile) {
                     location         = $regionClean
                     vmSize           = $clean
                     qty              = $qty
+                    zones            = $zoneArr
                 })
             }
         }
@@ -623,12 +632,14 @@ if ($LifecycleRecommendations -and $LifecycleFile) {
             $grouped = $fileVMRows | Group-Object -Property subscriptionId, subscriptionName, location, vmSize
             foreach ($g in $grouped) {
                 $sample = $g.Group[0]
+                $deployedZones = @($g.Group | ForEach-Object { if ($_.zones) { $_.zones } } | Where-Object { $_ } | Select-Object -Unique | Sort-Object)
                 $subMapRows.Add([pscustomobject]@{
                     SubscriptionId   = $sample.subscriptionId
                     SubscriptionName = if ($sample.subscriptionName) { $sample.subscriptionName } else { $sample.subscriptionId }
                     Region           = $sample.location
                     SKU              = $sample.vmSize
                     Qty              = ($g.Group | Measure-Object -Property qty -Sum).Sum
+                    Zones            = $deployedZones
                 })
             }
             $subMapRows = [System.Collections.Generic.List[PSCustomObject]]@($subMapRows | Sort-Object SubscriptionName, Region, SKU)
@@ -639,6 +650,7 @@ if ($LifecycleRecommendations -and $LifecycleFile) {
             $grouped = $fileVMRows | Group-Object -Property subscriptionId, subscriptionName, resourceGroup, location, vmSize
             foreach ($g in $grouped) {
                 $sample = $g.Group[0]
+                $deployedZones = @($g.Group | ForEach-Object { if ($_.zones) { $_.zones } } | Where-Object { $_ } | Select-Object -Unique | Sort-Object)
                 $rgMapRows.Add([pscustomobject]@{
                     SubscriptionId   = $sample.subscriptionId
                     SubscriptionName = if ($sample.subscriptionName) { $sample.subscriptionName } else { $sample.subscriptionId }
@@ -646,6 +658,7 @@ if ($LifecycleRecommendations -and $LifecycleFile) {
                     Region           = $sample.location
                     SKU              = $sample.vmSize
                     Qty              = ($g.Group | Measure-Object -Property qty -Sum).Sum
+                    Zones            = $deployedZones
                 })
             }
             $rgMapRows = [System.Collections.Generic.List[PSCustomObject]]@($rgMapRows | Sort-Object SubscriptionName, ResourceGroup, Region, SKU)
@@ -707,7 +720,7 @@ if ($LifecycleScan) {
         }
     }
     $argQuery += "`n| extend vmSize = tostring(properties.hardwareProfile.vmSize)"
-    $argQuery += "`n| project vmSize, location, subscriptionId, resourceGroup"
+    $argQuery += "`n| project vmSize, location, subscriptionId, resourceGroup, zones"
 
     if (-not $JsonOutput) { Write-Host "Querying Azure Resource Graph for live VM inventory..." -ForegroundColor Cyan }
 
@@ -792,12 +805,15 @@ if ($LifecycleScan) {
             foreach ($g in $grouped) {
                 $sample = $g.Group[0]
                 $subId = $sample.subscriptionId
+                # Aggregate distinct deployed zones across VMs in this (sub|region|sku) group
+                $deployedZones = @($g.Group | ForEach-Object { if ($_.zones) { $_.zones } } | Where-Object { $_ } | Select-Object -Unique | Sort-Object)
                 $subMapRows.Add([pscustomobject]@{
                     SubscriptionId   = $subId
                     SubscriptionName = if ($subNameMap[$subId]) { $subNameMap[$subId] } else { $subId }
                     Region           = $sample.location
                     SKU              = $sample.vmSize
                     Qty              = $g.Count
+                    Zones            = $deployedZones
                 })
             }
             $subMapRows = [System.Collections.Generic.List[PSCustomObject]]@($subMapRows | Sort-Object SubscriptionName, Region, SKU)
@@ -809,6 +825,7 @@ if ($LifecycleScan) {
             foreach ($g in $grouped) {
                 $sample = $g.Group[0]
                 $subId = $sample.subscriptionId
+                $deployedZones = @($g.Group | ForEach-Object { if ($_.zones) { $_.zones } } | Where-Object { $_ } | Select-Object -Unique | Sort-Object)
                 $rgMapRows.Add([pscustomobject]@{
                     SubscriptionId   = $subId
                     SubscriptionName = if ($subNameMap[$subId]) { $subNameMap[$subId] } else { $subId }
@@ -816,6 +833,7 @@ if ($LifecycleScan) {
                     Region           = $sample.location
                     SKU              = $sample.vmSize
                     Qty              = $g.Count
+                    Zones            = $deployedZones
                 })
             }
             $rgMapRows = [System.Collections.Generic.List[PSCustomObject]]@($rgMapRows | Sort-Object SubscriptionName, ResourceGroup, Region, SKU)
@@ -1250,10 +1268,11 @@ if ($LifecycleRecommendations) {
     if (-not $ShowPricing)      { $ShowPricing = [switch]::new($true) }
     if (-not $AutoExport)       { $AutoExport  = [switch]::new($true) }
     if (-not $RateOptimization) { $RateOptimization = [switch]::new($true) }
+    if (-not $AZ)               { $AZ = [switch]::new($true) }
     if ($NoQuota)               { } else { $NoQuota = $false }
     if (-not $ExportPath)       { $ExportPath = $defaultExportPath }
     if (-not $JsonOutput) {
-        Write-Host "Lifecycle mode: auto-enabled pricing, Excel export, savings plan/reservation details, and quota" -ForegroundColor DarkGray
+        Write-Host "Lifecycle mode: auto-enabled pricing, Excel export, savings plan/reservation details, quota, and zones" -ForegroundColor DarkGray
     }
 }
 
@@ -2586,6 +2605,7 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                     MatchType        = '-'
                     TopAlternative   = if ($riskLevel -eq 'Low') { 'N/A' } elseif ($isQuotaOnlyCurrentGen) { 'Request quota increase' } else { '-' }
                     AltScore         = ''
+                    AltZones         = if ($AZ) { '-' } else { '' }
                     CpuDelta         = '-'
                     AcuDelta         = '-'
                     MemDelta         = '-'
@@ -2760,6 +2780,23 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
 
                     $detailsStr = $detailParts -join '; '
 
+                    # Compute supported zones for the recommended/alternative SKU at the deployed region (-AZ summary column)
+                    $altZonesStr = ''
+                    if ($AZ) {
+                        $altZonesStr = '-'
+                        $rawAltSku = $lcSkuIndex["$($rec.sku)|$deployedRegion"]
+                        if (-not $rawAltSku) {
+                            # Fallback: any scanned region for this SKU (zone IDs are region-relative but better than blank)
+                            foreach ($k in $lcSkuIndex.Keys) {
+                                if ($k -like "$($rec.sku)|*") { $rawAltSku = $lcSkuIndex[$k]; break }
+                            }
+                        }
+                        if ($rawAltSku) {
+                            $altZi = Get-RestrictionDetails $rawAltSku
+                            $altZonesStr = Format-ZoneStatus $altZi.ZonesOK $altZi.ZonesLimited $altZi.ZonesRestricted
+                        }
+                    }
+
                     $lifecycleResults.Add([pscustomobject]@{
                         SKU              = if ($isFirstRow) { $target.Name } else { '' }
                         DeployedRegion   = if ($isFirstRow) { if ($deployedRegion) { $deployedRegion } else { '-' } } else { '' }
@@ -2772,6 +2809,7 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                         MatchType        = $sel.MatchType
                         TopAlternative   = $rec.sku
                         AltScore         = if ($rec.score -is [ValueType] -and $rec.score -isnot [bool]) { "$([int]$rec.score)%" } else { '' }
+                        AltZones         = $altZonesStr
                         CpuDelta         = $cpuDeltaStr
                         AcuDelta         = $acuDeltaStr
                         MemDelta         = $memDeltaStr
@@ -2931,11 +2969,13 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                 if (-not $raw) { return '' }
                 ($raw -split '\s*;\s*' | Where-Object { $_ -and $_ -notmatch '^Quota:\s*need\b' }) -join '; '
             }
+            $altZonesCol = if ($AZ) { @(@{N='Zones (Supported)';E={$_.AltZones}}) } else { @() }
             $lcProps = @(
                 @{N='SKU';E={$_.SKU}}, @{N='Region';E={$_.DeployedRegion}}, @{N='Qty';E={$_.Qty}},
                 @{N='vCPU';E={$_.vCPU}}, @{N='Memory (GB)';E={$_.MemoryGB}}, @{N='Generation';E={$_.Generation}},
                 @{N='Risk Level';E={$_.RiskLevel}}, @{N='Risk Reasons';E=$stripQuotaReasons},
-                @{N='Match Type';E={$_.MatchType}}, @{N='Alternative';E={$_.TopAlternative}}, @{N='Alt Score';E={$_.AltScore}},
+                @{N='Match Type';E={$_.MatchType}}, @{N='Alternative';E={$_.TopAlternative}}, @{N='Alt Score';E={$_.AltScore}}
+            ) + $altZonesCol + @(
                 @{N='CPU +/-';E={$_.CpuDelta}}, @{N='ACU +/-';E={$_.AcuDelta}}, @{N='Mem +/-';E={$_.MemDelta}},
                 @{N='Disk +/-';E={$_.DiskDelta}}, @{N='IOPS +/-';E={$_.IopsDelta}}
             ) + $pricingCols + @(@{N='Details';E={$_.Details}})
@@ -3041,7 +3081,8 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                 @{N='SKU';E={$_.SKU}}, @{N='Region';E={$_.DeployedRegion}}, @{N='Qty';E={$_.Qty}},
                 @{N='vCPU';E={$_.vCPU}}, @{N='Memory (GB)';E={$_.MemoryGB}}, @{N='Generation';E={$_.Generation}},
                 @{N='Risk Reasons';E=$stripQuotaReasons},
-                @{N='Match Type';E={$_.MatchType}}, @{N='Alternative';E={$_.TopAlternative}}, @{N='Alt Score';E={$_.AltScore}},
+                @{N='Match Type';E={$_.MatchType}}, @{N='Alternative';E={$_.TopAlternative}}, @{N='Alt Score';E={$_.AltScore}}
+            ) + $altZonesCol + @(
                 @{N='CPU +/-';E={$_.CpuDelta}}, @{N='ACU +/-';E={$_.AcuDelta}}, @{N='Mem +/-';E={$_.MemDelta}},
                 @{N='Disk +/-';E={$_.DiskDelta}}, @{N='IOPS +/-';E={$_.IopsDelta}}
             ) + $pricingCols + @(@{N='Details';E={$_.Details}})
@@ -3071,7 +3112,8 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                 @{N='SKU';E={$_.SKU}}, @{N='Region';E={$_.DeployedRegion}}, @{N='Qty';E={$_.Qty}},
                 @{N='vCPU';E={$_.vCPU}}, @{N='Memory (GB)';E={$_.MemoryGB}}, @{N='Generation';E={$_.Generation}},
                 @{N='Risk Reasons';E=$stripQuotaReasons},
-                @{N='Match Type';E={$_.MatchType}}, @{N='Alternative';E={$_.TopAlternative}}, @{N='Alt Score';E={$_.AltScore}},
+                @{N='Match Type';E={$_.MatchType}}, @{N='Alternative';E={$_.TopAlternative}}, @{N='Alt Score';E={$_.AltScore}}
+            ) + $altZonesCol + @(
                 @{N='CPU +/-';E={$_.CpuDelta}}, @{N='ACU +/-';E={$_.AcuDelta}}, @{N='Mem +/-';E={$_.MemDelta}},
                 @{N='Disk +/-';E={$_.DiskDelta}}, @{N='IOPS +/-';E={$_.IopsDelta}}
             ) + $pricingCols + @(@{N='Details';E={$_.Details}})
@@ -3141,6 +3183,11 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                             }
                         }
                         $props['Quota (Used/Limit)'] = $quotaStr
+                    }
+                    # Optional Availability Zones column (-AZ): show zones the VMs in this group are CURRENTLY DEPLOYED to.
+                    if ($AZ) {
+                        $deployed = if ($mapRow.PSObject.Properties['Zones']) { @($mapRow.Zones) } else { @() }
+                        $props['Zones (Deployed)'] = if ($deployed.Count -gt 0) { ($deployed -join ',') } else { 'Non-zonal' }
                     }
                     $enriched.Add([pscustomobject]$props)
                 }

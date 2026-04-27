@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`-AZ` switch — Availability Zones in lifecycle reports** — Adds two new zone columns; auto-enabled by `-LifecycleRecommendations` so the default lifecycle XLSX now includes zones with no extra flags.
+  - **`Zones (Deployed)`** on the **SubMap** and **Resource Group Map** sheets — shows the union of zones the affected VMs are *currently* deployed to (e.g., `1,2,3` or `Non-zonal`). Sourced from the ARG `zones` projection in live mode and from `Zone`/`Zones`/`AvailabilityZone` columns in file mode.
+  - **`Zones (Supported)`** on the **Lifecycle Summary**, **High Risk**, and **Medium Risk** sheets, inserted between `Alt Score` and `CPU +/-` — shows OK / Limited / Restricted zones for the *recommended alternative* SKU in the deployed region (e.g., `✓ Zones 1,2 | ⚠ Zones 3`, `Non-zonal`). Cross-region fallback applied when the SKU isn't indexed in the deployed region.
+  - The `-AZ` switch is also accepted on non-lifecycle paths for forward compatibility (no-op today).
+
+### Fixed
+- **Issue 1 — Generalized quota text on Summary** — Stripped per-sub `Quota: need NxNvCPU` fragments from the Lifecycle Summary `Risk Reasons` column. Per-sub quota detail remains on the SubMap / RGMap sheets where it is meaningful.
+- **Issue 2 — Missing ACU values for upgrade-path candidates** — Added cross-region ACU fallback: if a recommended alternative isn't indexed in the deployed region, scan all scanned regions for the same SKU before reporting `-`.
+- **Issue 3 — Savings Plan columns shown for sovereign clouds** — Auto-detect `$script:TargetEnvironment` (AzureCloud / AzureUSGovernment / AzureChinaCloud) and omit `SP 1-Year Savings` / `SP 3-Year Savings` columns entirely for tenants where Savings Plans aren't offered. RI columns are still emitted.
+- **Issue 4 — Empty RI / Spot pricing values** — Negotiated Consumption Price Sheet only carries PAYG meters today, so when the price sheet succeeded we silently dropped the retail container's `Reservation1Yr`, `Reservation3Yr`, `SavingsPlan1Yr`, `SavingsPlan3Yr`, and `Spot` maps. Pricing container is now an ordered hashtable that overlays negotiated PAYG on `Regular` while preserving the retail RI / SP / Spot maps from Tier 2, so RI / SP / Spot columns populate correctly in both commercial and sovereign clouds.
+
+### Added (tools)
+- **`tools/Probe-PriceSheetRI.ps1`** — Discovery probe that walks a subscription's Consumption Price Sheet API and buckets meters across 6 tiers (PAYG, Reservation 1Yr/3Yr, Savings Plan 1Yr/3Yr, Spot) to determine whether negotiated RI / SP rates are available for the parser to harvest. Supports both commercial and sovereign tenants.
+
 ## [2.1.1] — 2026-04-14
 
 ### Changed

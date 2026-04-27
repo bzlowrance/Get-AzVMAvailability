@@ -15,6 +15,10 @@ Get-AzVMAvailability helps you identify which Azure regions have available capac
 
 ## What's New
 
+### Unreleased — Availability Zones in lifecycle reports
+- **`-AZ` switch (auto-enabled by `-LifecycleRecommendations`)** — adds **`Zones (Deployed)`** on SubMap / Resource Group Map (which zones your VMs run in today) and **`Zones (Supported)`** on Lifecycle Summary / High Risk / Medium Risk (which zones the recommended replacement supports — OK, Limited, Restricted). No extra flag needed in lifecycle mode.
+- **GOV / sovereign cloud fixes** — Savings Plan columns now omitted automatically for sovereign tenants; Reserved Instance / Savings Plan / Spot retail rates are preserved when negotiated price sheet succeeds (previously RI/SP/Spot columns came back empty). Per-sub `Quota: need ...` text stripped from the Lifecycle Summary `Risk Reasons` (still surfaced on SubMap / RGMap). Cross-region ACU fallback for upgrade-path candidates.
+
 ### v2.0.0 — Module Conversion (April 2026)
 - **Smart default regions** — defaults now auto-detect based on cloud environment (Gov, China) and local timezone (Americas, Europe, APAC, etc.) — no more commercial defaults when connected to sovereign clouds
 - **PowerShell module** — install via `Install-Module AzVMAvailability` from PSGallery, or import directly from the repo

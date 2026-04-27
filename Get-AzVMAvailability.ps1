@@ -176,6 +176,9 @@ param(
     [Parameter(Mandatory = $false, HelpMessage = "Add a 'Resource Group Map' sheet to the lifecycle XLSX.")]
     [switch]$RGMap,
 
+    [Parameter(Mandatory = $false, HelpMessage = "Add a 'Zones (Available)' column to the Subscription Map / Resource Group Map sheets showing per-region availability-zone support for each SKU. Requires -SubMap or -RGMap.")]
+    [switch]$AZ,
+
     [Parameter(Mandatory = $false, HelpMessage = "Enable transcript logging. A timestamped log file is created in the export directory.")]
     [switch]$LogFile
 )

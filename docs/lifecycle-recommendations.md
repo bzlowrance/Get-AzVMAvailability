@@ -127,3 +127,14 @@ To include Savings Plan (SP) and Reserved Instance (RI) savings columns, add `-R
 ```
 
 With `-RateOptimization`, the XLSX report adds 4 savings columns: `SP 1-Year Savings`, `SP 3-Year Savings`, `RI 1-Year Savings`, `RI 3-Year Savings` — showing how much the fleet saves compared to PAYG by committing to each term.
+
+> **Sovereign clouds:** `SP 1-Year Savings` / `SP 3-Year Savings` columns are omitted automatically for `AzureUSGovernment`, `AzureChinaCloud`, and `AzureGermanCloud` tenants where Savings Plans are not offered. Reserved Instance columns are still emitted.
+
+## Availability Zones
+
+`-LifecycleRecommendations` automatically enables zone columns in the XLSX report (equivalent to passing `-AZ`):
+
+- **`Zones (Deployed)`** on the **SubMap** and **Resource Group Map** sheets — the union of zones the affected VMs are *currently* deployed to (e.g., `1,2,3` or `Non-zonal`). Sourced from Azure Resource Graph in live mode and from `Zone` / `Zones` / `AvailabilityZone` columns in file mode.
+- **`Zones (Supported)`** on the **Lifecycle Summary**, **High Risk**, and **Medium Risk** sheets, between `Alt Score` and `CPU +/-` — the zone availability of the *recommended alternative* SKU in the deployed region, formatted as `✓ Zones 1,2 | ⚠ Zones 3` (OK / Limited / Restricted) or `Non-zonal`. A cross-region fallback is applied when the alternative SKU isn't indexed in the deployed region.
+
+Use these columns together to plan zone-aligned migrations: confirm the recommended SKU still supports the zones your VMs are pinned to today.
