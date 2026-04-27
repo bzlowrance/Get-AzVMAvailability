@@ -1661,20 +1661,27 @@ if ($FetchPricing) {
     # Auto-detect: Try negotiated pricing first, fall back to retail
     Write-Host "Checking for negotiated pricing (EA/MCA/CSP)..." -ForegroundColor DarkGray
 
-    $actualPricingSuccess = $true
+    # Per-region: each region is evaluated independently. Sovereign enrollments
+    # often publish negotiated rates for some regions but not others (e.g. usgov
+    # primary but not paired regions); previously a single zero-result region
+    # discarded ALL collected negotiated pricing. Now: regions with negotiated
+    # rates use them; regions without fall back to retail individually.
+    $regionsWithNegotiated = [System.Collections.Generic.List[string]]::new()
+    $regionsWithoutNegotiated = [System.Collections.Generic.List[string]]::new()
     foreach ($regionCode in $Regions) {
         $actualPrices = Get-AzActualPricing -SubscriptionId $TargetSubIds[0] -Region $regionCode -MaxRetries $MaxRetries -HoursPerMonth $HoursPerMonth -AzureEndpoints $script:AzureEndpoints -TargetEnvironment $script:TargetEnvironment -Caches $script:RunContext.Caches
         if ($actualPrices -and $actualPrices.Count -gt 0) {
             if ($actualPrices -is [array]) { $actualPrices = $actualPrices[0] }
             $script:RunContext.RegionPricing[$regionCode] = $actualPrices
+            $regionsWithNegotiated.Add($regionCode) | Out-Null
         }
         else {
-            $actualPricingSuccess = $false
-            break
+            $regionsWithoutNegotiated.Add($regionCode) | Out-Null
         }
     }
+    $actualPricingSuccess = ($regionsWithNegotiated.Count -gt 0)
 
-    if ($actualPricingSuccess -and $script:RunContext.RegionPricing.Count -gt 0) {
+    if ($actualPricingSuccess) {
         $script:RunContext.UsingActualPricing = $true
         # Merge negotiated PAYG into the retail structure so reservation/SP/spot data is preserved.
         # Tier 1 (Price Sheet API) only returns PAYG meters; Reservation and Savings Plan rates are
@@ -1684,7 +1691,8 @@ if ($FetchPricing) {
             $retailResult = Get-AzVMPricing -Region $regionCode -MaxRetries $MaxRetries -HoursPerMonth $HoursPerMonth -AzureEndpoints $script:AzureEndpoints -TargetEnvironment $script:TargetEnvironment -Caches $script:RunContext.Caches
             if ($retailResult -is [array]) { $retailResult = $retailResult[0] }
             $retailMap = Get-RegularPricingMap -PricingContainer $retailResult
-            $negotiatedMap = $script:RunContext.RegionPricing[$regionCode]
+            # Regions with no negotiated rates simply use retail Regular as-is
+            $negotiatedMap = if ($script:RunContext.RegionPricing.ContainsKey($regionCode)) { $script:RunContext.RegionPricing[$regionCode] } else { $null }
             # Start with retail Regular map, overlay negotiated prices on top
             $mergedRegular = @{}
             if ($retailMap) {
@@ -1710,7 +1718,12 @@ if ($FetchPricing) {
             $ri3Count = $script:RunContext.RegionPricing[$regionCode].Reservation3Yr.Count
             Write-Verbose "Pricing merge for '$regionCode': $negotiatedCount negotiated + $($mergedRegular.Count - $negotiatedCount) retail Regular, $ri1Count RI-1yr, $ri3Count RI-3yr"
         }
-        Write-Host "$($Icons.Check) Using negotiated pricing (EA/MCA/CSP rates detected, RI/SP/Spot from retail)" -ForegroundColor Green
+        if ($regionsWithoutNegotiated.Count -gt 0) {
+            Write-Host "$($Icons.Check) Using negotiated pricing for $($regionsWithNegotiated.Count) of $($Regions.Count) region(s); retail fallback for: $($regionsWithoutNegotiated -join ', ')" -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "$($Icons.Check) Using negotiated pricing (EA/MCA/CSP rates detected, RI/SP/Spot from retail)" -ForegroundColor Green
+        }
     }
     else {
         # Fall back to retail pricing
@@ -2007,7 +2020,10 @@ try {
 
                 # Poll the counter from the main thread so the progress bar ticks
                 # every second with elapsed/ETA — Write-Progress from inside parallel
-                # runspaces does not reliably surface to the host.
+                # runspaces does not reliably surface to the host. Restore Continue
+                # so the bar isn't suppressed by the function-scope SilentlyContinue.
+                $savedScanProgressPref = $ProgressPreference
+                $ProgressPreference = 'Continue'
                 $pollSw = [System.Diagnostics.Stopwatch]::StartNew()
                 while ($parallelJob.State -eq 'Running' -or $parallelJob.State -eq 'NotStarted') {
                     $done = $scanCounter.Count
@@ -2030,6 +2046,7 @@ try {
                     Write-Progress -Activity "Scanning Azure Regions" -Status "$done / $totalItems work items - $elapsedStr elapsed - $etaStr" -PercentComplete $pct
                     Start-Sleep -Milliseconds 1000
                 }
+                $ProgressPreference = $savedScanProgressPref
                 $allScanResults = Receive-Job -Job $parallelJob -Wait -AutoRemoveJob
             }
             catch {
