@@ -2334,6 +2334,7 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
             $quotaInsufficient = $false
             $quotaDeficitSubs = 0
             $quotaTotalDeployingSubs = 0
+            $quotaDeficitSubIds = [System.Collections.Generic.List[string]]::new()
             if (-not $NoQuota) {
                 $perSubMap = $null
                 if ($lcVMSubMap -and $deployedRegion) {
@@ -2354,7 +2355,10 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                         $qi = Get-QuotaAvailable -QuotaLookup $subQuotaLookup -SkuFamily $rawSku.Family -RequiredvCPUs $needvCPUs
                         if ($null -ne $qi.Limit)   { $aggLimit   += [int]$qi.Limit }
                         if ($null -ne $qi.Current) { $aggCurrent += [int]$qi.Current }
-                        if ($null -ne $qi.Available -and -not $qi.OK) { $quotaDeficitSubs++ }
+                        if ($null -ne $qi.Available -and -not $qi.OK) {
+                            $quotaDeficitSubs++
+                            $quotaDeficitSubIds.Add($pSubId) | Out-Null
+                        }
                     }
                     if ($aggLimit -gt 0 -or $aggCurrent -gt 0) {
                         $targetQuotaAvail = [pscustomobject]@{ Available = $aggLimit - $aggCurrent; Limit = $aggLimit; Current = $aggCurrent; OK = ($quotaDeficitSubs -eq 0) }
@@ -2911,6 +2915,7 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                         Generation       = if ($isFirstRow) { "v$generation" } else { '' }
                         RiskLevel        = if ($isFirstRow) { $riskLevel } else { '' }
                         RiskReasons      = if ($isFirstRow) { ($riskReasons -join '; ') } else { '' }
+                        QuotaDeficitSubs = if ($isFirstRow) { ($quotaDeficitSubIds -join ',') } else { '' }
                         MatchType        = $sel.MatchType
                         TopAlternative   = $rec.sku
                         AltScore         = if ($rec.score -is [ValueType] -and $rec.score -isnot [bool]) { "$([int]$rec.score)%" } else { '' }
@@ -3067,12 +3072,14 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
             } else { @() }
 
             # Lifecycle Summary: quota columns moved to SubMap/RGMap tabs.
-            # Per-sub quota text ("Quota: need NxNvCPU") is also stripped from Risk Reasons here
-            # because the Summary aggregates across subs; per-sub quota is surfaced on SubMap/RGMap tabs.
+            # ALL "Quota:" reasons are stripped from Summary Risk Reasons because quota
+            # is per-subscription — surfacing it on the cross-sub Summary is misleading.
+            # Per-sub quota deficits are still shown on SubMap/RGMap tabs against the
+            # specific subscription that is short on quota.
             $stripQuotaReasons = {
                 $raw = [string]$_.RiskReasons
                 if (-not $raw) { return '' }
-                ($raw -split '\s*;\s*' | Where-Object { $_ -and $_ -notmatch '^Quota:\s*need\b' }) -join '; '
+                ($raw -split '\s*;\s*' | Where-Object { $_ -and $_ -notmatch '^\s*Quota\s*:' }) -join '; '
             }
             $altZonesCol = if ($AZ) { @(@{N='Zones (Supported)';E={$_.AltZones}}) } else { @() }
             $lcProps = @(
@@ -3251,7 +3258,16 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                 foreach ($lr in $lifecycleResults) {
                     $riskKey = "$($lr.SKU)|$($lr.DeployedRegion)"
                     if (-not $riskLookup.ContainsKey($riskKey)) {
-                        $riskLookup[$riskKey] = @{ RiskLevel = $lr.RiskLevel; RiskReasons = $lr.RiskReasons }
+                        $deficitField = if ($lr.PSObject.Properties['QuotaDeficitSubs']) { [string]$lr.QuotaDeficitSubs } else { '' }
+                        $deficitSet = [System.Collections.Generic.HashSet[string]]::new()
+                        if ($deficitField) {
+                            foreach ($s in ($deficitField -split ',')) { if ($s) { [void]$deficitSet.Add($s.Trim()) } }
+                        }
+                        $riskLookup[$riskKey] = @{
+                            RiskLevel        = $lr.RiskLevel
+                            RiskReasons      = $lr.RiskReasons
+                            QuotaDeficitSubs = $deficitSet
+                        }
                     }
                 }
             }
@@ -3263,6 +3279,25 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                 foreach ($mapRow in $mapRows) {
                     $rKey = "$($mapRow.SKU)|$($mapRow.Region)"
                     $risk = $riskLookup[$rKey]
+                    # Filter Quota:* reasons so they appear only on rows for the deficient subscription(s).
+                    # A row in a sub that has sufficient quota should not show a quota risk.
+                    $rowRiskReasons = ''
+                    $rowRiskLevel   = if ($risk) { $risk.RiskLevel } else { 'Low' }
+                    if ($risk -and $risk.RiskReasons) {
+                        $thisSubInDeficit = ($risk.QuotaDeficitSubs -and $risk.QuotaDeficitSubs.Contains([string]$mapRow.SubscriptionId))
+                        $parts = @($risk.RiskReasons -split '\s*;\s*' | Where-Object { $_ })
+                        $kept = foreach ($p in $parts) {
+                            if ($p -match '^\s*Quota\s*:') {
+                                if ($thisSubInDeficit) { $p } # only keep on the affected sub
+                            }
+                            else { $p }
+                        }
+                        $rowRiskReasons = ($kept -join '; ')
+                        # If the only original risk was Quota and this sub isn't deficient, downgrade level
+                        if (-not $rowRiskReasons -and $rowRiskLevel -eq 'High' -and $parts.Count -gt 0 -and -not ($parts | Where-Object { $_ -notmatch '^\s*Quota\s*:' })) {
+                            $rowRiskLevel = 'Low'
+                        }
+                    }
                     $props = [ordered]@{
                         SubscriptionId   = $mapRow.SubscriptionId
                         SubscriptionName = $mapRow.SubscriptionName
@@ -3271,8 +3306,8 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                     $props['Region']      = $mapRow.Region
                     $props['SKU']         = $mapRow.SKU
                     $props['Qty']         = $mapRow.Qty
-                    $props['RiskLevel']   = if ($risk) { $risk.RiskLevel } else { 'Low' }
-                    $props['RiskReasons'] = if ($risk) { $risk.RiskReasons } else { '' }
+                    $props['RiskLevel']   = $rowRiskLevel
+                    $props['RiskReasons'] = $rowRiskReasons
                     # Per-subscription quota lookup
                     if (-not $NoQuota) {
                         $quotaStr = '-'
