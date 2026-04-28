@@ -2900,9 +2900,9 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                         if ($rec.PSObject.Properties['priceIsNegotiated']) { $recIsNeg = [bool]$rec.priceIsNegotiated }
                         $priceMarker = if ($targetPriceIsNegotiated -and $recIsNeg) { '' } else { '*' }
                         $diff = [double]$rec.priceMo - $targetPriceMo
-                        $priceDiffStr = if ($diff -ge 0) { $priceMarker + '+' + $diff.ToString('0') } else { $priceMarker + '-' + ([Math]::Abs($diff)).ToString('0') }
+                        $priceDiffStr = if ($diff -eq 0) { $priceMarker + '0' } elseif ($diff -gt 0) { $priceMarker + '+' + $diff.ToString('0') } else { $priceMarker + '-' + ([Math]::Abs($diff)).ToString('0') }
                         $totalDiff = $diff * $entryQty
-                        $totalDiffStr = if ($totalDiff -ge 0) { $priceMarker + '+' + $totalDiff.ToString('N0') } else { $priceMarker + '-' + ([Math]::Abs($totalDiff)).ToString('N0') }
+                        $totalDiffStr = if ($totalDiff -eq 0) { $priceMarker + '0' } elseif ($totalDiff -gt 0) { $priceMarker + '+' + $totalDiff.ToString('N0') } else { $priceMarker + '-' + ([Math]::Abs($totalDiff)).ToString('N0') }
                         $recPriceMarker = if ($recIsNeg) { '' } else { '*' }
                         $payg1Yr = [double]$rec.priceMo * 12 * $entryQty
                         $payg1YrStr = $recPriceMarker + $payg1Yr.ToString('N0')
@@ -2991,15 +2991,15 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
 
                     # Compute deltas from rec/target capability data \u2014 always available even when capacity is unknown
                     $cpuDiff = $recVCPU - [int]$target.vCPU
-                    $cpuDeltaStr = if ($recVCPU -le 0 -or [int]$target.vCPU -le 0) { '-' } elseif ($cpuDiff -eq 0) { '±0' } elseif ($cpuDiff -gt 0) { "+$cpuDiff" } else { "$cpuDiff" }
+                    $cpuDeltaStr = if ($recVCPU -le 0 -or [int]$target.vCPU -le 0) { '-' } elseif ($cpuDiff -eq 0) { '0' } elseif ($cpuDiff -gt 0) { "+$cpuDiff" } else { "$cpuDiff" }
                     $acuDiff = $recACU - $targetACU
-                    $acuDeltaStr = if ($targetACU -le 0 -or $recACU -le 0) { '-' } elseif ($acuDiff -eq 0) { '±0' } elseif ($acuDiff -gt 0) { "+$acuDiff" } else { "$acuDiff" }
+                    $acuDeltaStr = if ($targetACU -le 0 -or $recACU -le 0) { '-' } elseif ($acuDiff -eq 0) { '0' } elseif ($acuDiff -gt 0) { "+$acuDiff" } else { "$acuDiff" }
                     $memDiff = $recMemGiB - [double]$target.MemoryGB
-                    $memDeltaStr = if ($recMemGiB -le 0 -or [double]$target.MemoryGB -le 0) { '-' } elseif ($memDiff -eq 0) { '±0' } elseif ($memDiff -gt 0) { "+$memDiff" } else { "$memDiff" }
+                    $memDeltaStr = if ($recMemGiB -le 0 -or [double]$target.MemoryGB -le 0) { '-' } elseif ($memDiff -eq 0) { '0' } elseif ($memDiff -gt 0) { "+$memDiff" } else { "$memDiff" }
                     $diskDiff = $recMaxDisks - [int]$target.MaxDataDiskCount
-                    $diskDeltaStr = if ($recMaxDisks -le 0 -or [int]$target.MaxDataDiskCount -le 0) { '-' } elseif ($diskDiff -eq 0) { '±0' } elseif ($diskDiff -gt 0) { "+$diskDiff" } else { "$diskDiff" }
+                    $diskDeltaStr = if ($recMaxDisks -le 0 -or [int]$target.MaxDataDiskCount -le 0) { '-' } elseif ($diskDiff -eq 0) { '0' } elseif ($diskDiff -gt 0) { "+$diskDiff" } else { "$diskDiff" }
                     $iopsDiff = $recIOPS - [int]$target.UncachedDiskIOPS
-                    $iopsDeltaStr = if ($recIOPS -le 0 -or [int]$target.UncachedDiskIOPS -le 0) { '-' } elseif ($iopsDiff -eq 0) { '±0' } elseif ($iopsDiff -gt 0) { "+$iopsDiff" } else { "$iopsDiff" }
+                    $iopsDeltaStr = if ($recIOPS -le 0 -or [int]$target.UncachedDiskIOPS -le 0) { '-' } elseif ($iopsDiff -eq 0) { '0' } elseif ($iopsDiff -gt 0) { "+$iopsDiff" } else { "$iopsDiff" }
 
                     # Build Details string explaining why this recommendation was selected
                     $targetFamily = $target.Family
