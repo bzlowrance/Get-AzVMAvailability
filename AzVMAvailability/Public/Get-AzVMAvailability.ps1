@@ -2967,19 +2967,23 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                             # Mark SP savings with leading '*' when the SP rate is retail (not negotiated).
                             # Negotiated SP rates come from the Price Sheet savingsPlan sub-object;
                             # retail SP rates come from the public Retail Prices API.
+                            # Format: "<marker><savings> (<pct>%)" where pct is savings as a
+                            # percentage of the corresponding PAYG fleet total.
                             $sp1Entry = $sp1YrMap[$rec.sku]
                             if ($sp1Entry) {
                                 $sp1Fleet = [double]$sp1Entry.Monthly * 12 * $entryQty
                                 $sp1Savings = $recPaygFleet1Yr - $sp1Fleet
+                                $sp1Pct = if ($recPaygFleet1Yr -gt 0) { [math]::Round(($sp1Savings / $recPaygFleet1Yr) * 100, 0) } else { 0 }
                                 $sp1Marker = if ($sp1Entry.IsNegotiated) { '' } else { '*' }
-                                $sp1YrSavingsStr = $sp1Marker + $sp1Savings.ToString('N0')
+                                $sp1YrSavingsStr = $sp1Marker + $sp1Savings.ToString('N0') + ' (' + $sp1Pct + '%)'
                             }
                             $sp3Entry = $sp3YrMap[$rec.sku]
                             if ($sp3Entry) {
                                 $sp3Fleet = [double]$sp3Entry.Monthly * 36 * $entryQty
                                 $sp3Savings = $recPaygFleet3Yr - $sp3Fleet
+                                $sp3Pct = if ($recPaygFleet3Yr -gt 0) { [math]::Round(($sp3Savings / $recPaygFleet3Yr) * 100, 0) } else { 0 }
                                 $sp3Marker = if ($sp3Entry.IsNegotiated) { '' } else { '*' }
-                                $sp3YrSavingsStr = $sp3Marker + $sp3Savings.ToString('N0')
+                                $sp3YrSavingsStr = $sp3Marker + $sp3Savings.ToString('N0') + ' (' + $sp3Pct + '%)'
                             }
                         }
                         # Reservation rates are NOT exposed by the Consumption Price Sheet API
