@@ -3423,6 +3423,39 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                 }
                 $sRow++
             }
+
+            # Legend / footnote — explain markers used throughout the sheet
+            $legendRow = $sRow + 1
+            $ws.Cells["A$legendRow"].Value = "LEGEND"
+            $ws.Cells["A$legendRow`:F$legendRow"].Merge = $true
+            $ws.Cells["A$legendRow"].Style.Font.Bold = $true
+            $ws.Cells["A$legendRow"].Style.Font.Size = 11
+            $ws.Cells["A$legendRow`:F$legendRow"].Style.Fill.PatternType = [OfficeOpenXml.Style.ExcelFillStyle]::Solid
+            $ws.Cells["A$legendRow`:F$legendRow"].Style.Fill.BackgroundColor.SetColor($headerBlue)
+            $ws.Cells["A$legendRow`:F$legendRow"].Style.Font.Color.SetColor([System.Drawing.Color]::White)
+
+            $legendItems = @(
+                @{ Marker = '*';   Meaning = "RETAIL price (list, from Azure Retail Prices API). Negotiated EA/MCA/CSP rate was not available for that SKU/region. Your actual cost may be lower." }
+                @{ Marker = '* (RI)'; Meaning = "Reserved Instance (1-Yr / 3-Yr) Savings columns are ALWAYS marked with '*'. The Azure Consumption Price Sheet API does not expose negotiated reservation rates — only PAYG and Savings Plan effective prices. Reservation rates therefore come from the public Azure Retail Prices API (list prices). Your actual reservation cost at purchase quote time may be lower (EA/MCA discounts, regional offers, hybrid benefit). Treat RI savings shown here as a CONSERVATIVE LOWER BOUND." }
+                @{ Marker = '+N';  Meaning = "Recommended SKU costs MORE than current (e.g. +25 = +`$25/mo per VM, or +1 vCPU)." }
+                @{ Marker = '-N';  Meaning = "Recommended SKU costs LESS than current, or has fewer resources (e.g. -10 = saves `$10/mo per VM)." }
+                @{ Marker = '0';   Meaning = "No change between current and recommended (price, vCPU, memory, disks, or IOPS)." }
+                @{ Marker = '-';   Meaning = "Data not available (capability missing from SKU index, or price unavailable for region)." }
+            )
+
+            foreach ($li in $legendItems) {
+                $legendRow++
+                $ws.Cells["A$legendRow"].Value = $li.Marker
+                $ws.Cells["A$legendRow"].Style.Font.Bold = $true
+                $ws.Cells["A$legendRow"].Style.HorizontalAlignment = [OfficeOpenXml.Style.ExcelHorizontalAlignment]::Center
+                $ws.Cells["B$legendRow`:F$legendRow"].Merge = $true
+                $ws.Cells["B$legendRow"].Value = $li.Meaning
+                $ws.Cells["B$legendRow"].Style.WrapText = $true
+                $ws.Cells["A$legendRow`:F$legendRow"].Style.Fill.PatternType = [OfficeOpenXml.Style.ExcelFillStyle]::Solid
+                $ws.Cells["A$legendRow`:F$legendRow"].Style.Fill.BackgroundColor.SetColor($lightGray)
+                # Taller row for the RI explanation so the wrapped text is fully visible.
+                if ($li.Marker -eq '* (RI)') { $ws.Row($legendRow).Height = 75 }
+            }
             #endregion Lifecycle Summary Sheet
 
             #region Risk Breakdown Sheet
