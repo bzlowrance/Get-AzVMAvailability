@@ -1,8 +1,8 @@
 # Roadmap
 
-## Current Release: v2.1.1
+## Current Release: v2.2.0
 
-> **v2.1.1:** Pipeline capture detection UX improvement and roadmap accuracy updates. See [CHANGELOG.md](CHANGELOG.md) for details.
+> **v2.2.0:** Sovereign pricing correctness, Reservation/Savings-Plan savings as retail-vs-retail percent, advisory upgrade-path recs, AZ zone columns by default, Lifecycle Summary legend, dedupe candidate pool (~100x speedup), parallel cross-sub scan, mid-scan token refresh, live progress/ETA. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 See [CHANGELOG.md](CHANGELOG.md) for full version history.
 

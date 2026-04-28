@@ -1,6 +1,6 @@
 @{
     RootModule        = 'AzVMAvailability.psm1'
-    ModuleVersion     = '2.1.1'
+    ModuleVersion     = '2.2.0'
     GUID              = '7f42e8d6-e85d-4e31-a541-d9af648a5269'
     Author            = 'Zachary Luz'
     CompanyName       = 'Community'
@@ -23,7 +23,7 @@
             Tags         = @('Azure', 'VM', 'SKU', 'Capacity', 'Availability', 'Quota', 'Pricing')
             LicenseUri   = 'https://github.com/zacharyluz/Get-AzVMAvailability/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/zacharyluz/Get-AzVMAvailability'
-            ReleaseNotes = 'v2.0.0: Module conversion — Public/Private layout, PSGallery publishing, thin wrapper script, CI/CD release automation. No new features or behavior changes.'
+            ReleaseNotes = 'v2.2.0: Sovereign pricing correctness (Spot meter exclusion, paired meter split, Gov meterLocation aliases, Expired suffix strip, retail-fallback marker), Reservation/SP savings as retail-vs-retail percent, advisory upgrade-path recs, AZ zone columns auto-enabled in lifecycle, Lifecycle Summary legend block, dedupe candidate pool (~100x), parallel cross-sub scan, mid-scan token refresh, live progress/ETA. See CHANGELOG.md.'
         }
     }
 }
