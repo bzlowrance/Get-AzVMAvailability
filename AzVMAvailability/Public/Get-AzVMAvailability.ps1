@@ -1729,8 +1729,15 @@ if ($FetchPricing) {
                     }
                 }
             }
+            # Keep an unmerged retail PAYG map alongside the merged Regular map.
+            # SP/RI savings percentages must be computed retail-vs-retail (denominator =
+            # retail PAYG, not negotiated PAYG) so the percentage reflects the inherent
+            # commitment discount and stacks cleanly on top of the customer's EA/MCA
+            # discount. If we used negotiated PAYG, the % would be artificially compressed
+            # because the denominator already includes the EA discount.
             $script:RunContext.RegionPricing[$regionCode] = [ordered]@{
                 Regular        = $mergedRegular
+                RegularRetail  = if ($retailMap) { $retailMap } else { @{} }
                 Spot           = if ($retailResult -and $retailResult.Spot)           { $retailResult.Spot }           else { @{} }
                 SavingsPlan1Yr = $retailSP1
                 SavingsPlan3Yr = $retailSP3
@@ -2878,8 +2885,13 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
             $isSovereignRegion = $script:TargetEnvironment -in @('AzureUSGovernment', 'AzureChinaCloud', 'AzureGermanCloud') -or
                 ($deployedRegion -and $deployedRegion -match '^(usgov|usdod|usnat|ussec|china|germany)')
 
-            # Look up savings plan and reservation pricing maps for this region
+            # Look up savings plan and reservation pricing maps for this region.
+            # Also pull the unmerged retail PAYG map so SP/RI savings percentages are
+            # computed retail-vs-retail (apples-to-apples against list); this ensures
+            # the displayed % reflects the inherent commitment discount and the
+            # customer's EA/MCA discount stacks on top.
             $sp1YrMap = @{}; $sp3YrMap = @{}; $ri1YrMap = @{}; $ri3YrMap = @{}
+            $retailRegularMap = @{}
             if ($RateOptimization -and $FetchPricing -and $deployedRegion -and $script:RunContext.RegionPricing[$deployedRegion]) {
                 $regionContainer = $script:RunContext.RegionPricing[$deployedRegion]
                 if (-not $isSovereignRegion) {
@@ -2888,6 +2900,9 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                 }
                 $ri1YrMap = Get-ReservationPricingMap -PricingContainer $regionContainer -Term '1Yr'
                 $ri3YrMap = Get-ReservationPricingMap -PricingContainer $regionContainer -Term '3Yr'
+                if ($regionContainer -is [System.Collections.IDictionary] -and $regionContainer.Contains('RegularRetail') -and $regionContainer['RegularRetail']) {
+                    $retailRegularMap = $regionContainer['RegularRetail']
+                }
             }
 
             # Build lifecycle result rows — one per selected recommendation (or one summary row)
@@ -2961,8 +2976,17 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                     $sp3YrSavingsStr = if ($isSovereignRegion) { 'N/A' } else { '-' }
                     $ri1YrSavingsStr = '-'; $ri3YrSavingsStr = '-'
                     if ($RateOptimization -and $FetchPricing -and $null -ne $rec.priceMo) {
-                        $recPaygFleet1Yr = [double]$rec.priceMo * 12 * $entryQty
-                        $recPaygFleet3Yr = [double]$rec.priceMo * 36 * $entryQty
+                        # Denominator for SP/RI percentages = RETAIL PAYG fleet total.
+                        # Falls back to the (possibly-negotiated) priceMo when no retail
+                        # entry exists for the SKU/region (e.g. sovereign clouds where the
+                        # Retail Prices API has no record). This keeps the percentage
+                        # apples-to-apples against list rates so the customer's EA/MCA
+                        # discount stacks on top, rather than compressing the %.
+                        $retailRecEntry = $null
+                        if ($retailRegularMap -and $retailRegularMap.ContainsKey($rec.sku)) { $retailRecEntry = $retailRegularMap[$rec.sku] }
+                        $retailMonthly = if ($retailRecEntry -and $retailRecEntry.Monthly) { [double]$retailRecEntry.Monthly } else { [double]$rec.priceMo }
+                        $recPaygFleet1Yr = $retailMonthly * 12 * $entryQty
+                        $recPaygFleet3Yr = $retailMonthly * 36 * $entryQty
                         if (-not $isSovereignRegion) {
                             # Mark SP savings with leading '*' when the SP rate is retail (not negotiated).
                             # Negotiated SP rates come from the Price Sheet savingsPlan sub-object;
@@ -3414,7 +3438,7 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
             #      RI savings are always sourced from the public Retail Prices API.
             if ($FetchPricing) {
                 $retailFallback = @($script:RunContext.RetailFallbackRegions)
-                $riLegendText = "RI 3-Year Savings is always shown with a leading '*' because the Consumption Price Sheet API does not expose negotiated reservation rates. These values come from the public Azure Retail Prices API (list prices). Format: '*<savings> (<pct>%)' where pct is savings as a percentage of the 3-year PAYG fleet total. Your actual reservation cost at purchase quote time may differ."
+                $riLegendText = "RI 3-Year Savings is always shown with a leading '*' because the Consumption Price Sheet API does not expose negotiated reservation rates. These values come from the public Azure Retail Prices API (list prices). Format: '*<savings> (<pct>%)' where pct is savings vs the 3-year RETAIL (list) PAYG fleet total — apples-to-apples against list. Your EA/MCA discount stacks on top: e.g. if the cell shows 70% and you have a 20% EA discount, the realized discount on top of your existing PAYG bill is closer to 50%. Your actual reservation cost at purchase quote time may differ."
                 foreach ($riHeader in @('RI 3-Year Savings')) {
                     $riColIdx = 0
                     for ($c = 1; $c -le $lastCol; $c++) {
@@ -3504,7 +3528,7 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
 
             $legendItems = @(
                 @{ Marker = '*';   Meaning = "RETAIL price (list, from Azure Retail Prices API). Negotiated EA/MCA/CSP rate was not available for that SKU/region. Your actual cost may be lower." }
-                @{ Marker = '* (RI)'; Meaning = "Reserved Instance (1-Yr / 3-Yr) Savings columns are ALWAYS marked with '*'. The Azure Consumption Price Sheet API does not expose negotiated reservation rates — only PAYG and Savings Plan effective prices. Reservation rates therefore come from the public Azure Retail Prices API (list prices). Format: '*<savings> (<pct>%)' where pct is savings as a percentage of the corresponding PAYG fleet total. Your actual reservation cost at purchase quote time may be lower (EA/MCA discounts, regional offers, hybrid benefit). Treat RI savings shown here as a CONSERVATIVE LOWER BOUND." }
+                @{ Marker = '* (RI)'; Meaning = "Reserved Instance (1-Yr / 3-Yr) Savings columns are ALWAYS marked with '*'. The Azure Consumption Price Sheet API does not expose negotiated reservation rates — only PAYG and Savings Plan effective prices. Reservation rates therefore come from the public Azure Retail Prices API (list prices). Format: '*<savings> (<pct>%)' where pct is savings vs the corresponding RETAIL (list) PAYG fleet total — apples-to-apples against list. Your EA/MCA discount stacks on top: if the cell shows 70% and you have a 20% EA discount, the realized discount above your existing PAYG bill is roughly 50%. Treat RI savings shown here as a CONSERVATIVE LOWER BOUND." }
                 @{ Marker = '+N';  Meaning = "Recommended SKU costs MORE than current (e.g. +25 = +`$25/mo per VM, or +1 vCPU)." }
                 @{ Marker = '-N';  Meaning = "Recommended SKU costs LESS than current, or has fewer resources (e.g. -10 = saves `$10/mo per VM)." }
                 @{ Marker = '0';   Meaning = "No change between current and recommended (price, vCPU, memory, disks, or IOPS)." }
