@@ -70,15 +70,18 @@ function Get-AzActualPricing {
     # Cache schema v3: structured container { Regular, SP1Yr, SP3Yr } per region.
     # Negotiated Savings Plan rates are now harvested from each row's savingsPlan
     # sub-object (effectivePrice + term=P1Y/P3Y per Consumption Price Sheet API spec).
+    # v4 splits paired meter names like 'D3/DS3 v2' into both ARM SKUs (D3_v2 + DS3_v2).
     # v2 stored only the flat Regular map; v1 mistakenly accepted Spot meters as PAYG.
-    $cacheFile = Join-Path $cacheDir "AzVMLifecycle-PriceSheet-v3-$cacheKey.json"
-    # Negative cache sidecar — records last Tier 1 failure (typically HTTP 429) so we
+    $cacheFile = Join-Path $cacheDir "AzVMLifecycle-PriceSheet-v4-$cacheKey.json"
+    # Negative cache sidecar \u2014 records last Tier 1 failure (typically HTTP 429) so we
     # don't keep banging the throttle wall for ~11 minutes per attempt across runs.
-    $negCacheFile = Join-Path $cacheDir "AzVMLifecycle-PriceSheet-v3-$cacheKey.failed.json"
+    $negCacheFile = Join-Path $cacheDir "AzVMLifecycle-PriceSheet-v4-$cacheKey.failed.json"
     # Best-effort cleanup of obsolete cache files.
     Get-ChildItem $cacheDir -Filter "AzVMLifecycle-PriceSheet-$cacheKey.json" -ErrorAction SilentlyContinue |
         Remove-Item -ErrorAction SilentlyContinue
     Get-ChildItem $cacheDir -Filter "AzVMLifecycle-PriceSheet-v2-$cacheKey.json" -ErrorAction SilentlyContinue |
+        Remove-Item -ErrorAction SilentlyContinue
+    Get-ChildItem $cacheDir -Filter "AzVMLifecycle-PriceSheet-v3-$cacheKey*.json" -ErrorAction SilentlyContinue |
         Remove-Item -ErrorAction SilentlyContinue
 
     # Helper: resolve an ARM region to the first matching cached meterLocation key.
@@ -332,11 +335,27 @@ function Get-AzActualPricing {
                     $normalizedRegion = ($meterLoc -replace '[\s-]', '').ToLower()
                     if (-not $normalizedRegion) { $skipReasons.EmptyMeterLocation++; continue }
 
-                    # Convert billing meter name to ARM SKU name
+                    # Convert billing meter name to ARM SKU name(s).
+                    # Older paired sizes (e.g. 'D3/DS3 v2', 'D8/D8s v3', 'E2/E2s v3') ship as a
+                    # single combined meter that covers both the basic and the premium-storage 's'
+                    # variant at the same rate. Naive parsing produces 'Standard_D3/DS3_v2' which
+                    # matches no real ARM SKU and forces those workloads to retail fallback. Split
+                    # the slash and emit one entry per ARM SKU so both lookups hit.
                     # No longer strip Spot/Low Priority — those meters are filtered out above.
                     $cleanName = $meterNameRaw.Trim() -replace '^Standard[\s_]+', ''
                     if ($cleanName -notmatch '^[A-Z]') { $skipReasons.UnparsableMeterName++; continue }
-                    $vmSize = "Standard_$($cleanName -replace '\s+', '_')"
+                    $vmSizes = @()
+                    if ($cleanName -match '^(?<heads>[A-Za-z0-9-]+(?:/[A-Za-z0-9-]+)+)(?<tail>(?:\s+.+)?)$') {
+                        $tail  = $Matches['tail']
+                        $heads = $Matches['heads'] -split '/'
+                        foreach ($h in $heads) {
+                            $combined = ($h + $tail).Trim() -replace '\s+', '_'
+                            $vmSizes += "Standard_$combined"
+                        }
+                    }
+                    else {
+                        $vmSizes = @("Standard_$($cleanName -replace '\s+', '_')")
+                    }
 
                     # Determine the hourly divisor from unitOfMeasure
                     # Common values: "1 Hour", "100 Hours", "1/Month", "1/Day"
@@ -373,16 +392,20 @@ function Get-AzActualPricing {
                             switch ($item.savingsPlan.term) {
                                 'P1Y' {
                                     if (-not $allRegionSP1Yr.ContainsKey($normalizedRegion)) { $allRegionSP1Yr[$normalizedRegion] = @{} }
-                                    if (-not $allRegionSP1Yr[$normalizedRegion].ContainsKey($vmSize)) {
-                                        $allRegionSP1Yr[$normalizedRegion][$vmSize] = $spEntry
-                                        $totalSP1Meters++
+                                    foreach ($vmSize in $vmSizes) {
+                                        if (-not $allRegionSP1Yr[$normalizedRegion].ContainsKey($vmSize)) {
+                                            $allRegionSP1Yr[$normalizedRegion][$vmSize] = $spEntry
+                                            $totalSP1Meters++
+                                        }
                                     }
                                 }
                                 'P3Y' {
                                     if (-not $allRegionSP3Yr.ContainsKey($normalizedRegion)) { $allRegionSP3Yr[$normalizedRegion] = @{} }
-                                    if (-not $allRegionSP3Yr[$normalizedRegion].ContainsKey($vmSize)) {
-                                        $allRegionSP3Yr[$normalizedRegion][$vmSize] = $spEntry
-                                        $totalSP3Meters++
+                                    foreach ($vmSize in $vmSizes) {
+                                        if (-not $allRegionSP3Yr[$normalizedRegion].ContainsKey($vmSize)) {
+                                            $allRegionSP3Yr[$normalizedRegion][$vmSize] = $spEntry
+                                            $totalSP3Meters++
+                                        }
                                     }
                                 }
                             }
@@ -395,25 +418,27 @@ function Get-AzActualPricing {
                         $allRegionPrices[$normalizedRegion] = @{}
                     }
 
-                    if (-not $allRegionPrices[$normalizedRegion].ContainsKey($vmSize)) {
-                        $rawRate = [double]$item.unitPrice
-                        if ($rawRate -le 0) { $skipReasons.ZeroOrNegativeUnitPrice++; continue }
-                        $negotiatedRate = $rawRate / $hourlyDivisor
-                        $retailRate = if ($md.pretaxStandardRate) { [double]$md.pretaxStandardRate / $hourlyDivisor } else { $null }
-
-                        $allRegionPrices[$normalizedRegion][$vmSize] = @{
-                            Hourly       = [math]::Round($negotiatedRate, 4)
-                            Monthly      = [math]::Round($negotiatedRate * $HoursPerMonth, 2)
-                            Currency     = $item.currencyCode
-                            Meter        = $md.meterName
-                            IsNegotiated = $true
+                    $rawRate = [double]$item.unitPrice
+                    if ($rawRate -le 0) { $skipReasons.ZeroOrNegativeUnitPrice++; continue }
+                    $negotiatedRate = $rawRate / $hourlyDivisor
+                    $retailRate = if ($md.pretaxStandardRate) { [double]$md.pretaxStandardRate / $hourlyDivisor } else { $null }
+                    $newEntry = @{
+                        Hourly       = [math]::Round($negotiatedRate, 4)
+                        Monthly      = [math]::Round($negotiatedRate * $HoursPerMonth, 2)
+                        Currency     = $item.currencyCode
+                        Meter        = $md.meterName
+                        IsNegotiated = $true
+                    }
+                    if ($retailRate -and $retailRate -gt 0) {
+                        $newEntry.RetailHourly = [math]::Round($retailRate, 4)
+                        $newEntry.DiscountPct  = [math]::Round((1 - ($negotiatedRate / $retailRate)) * 100, 1)
+                    }
+                    foreach ($vmSize in $vmSizes) {
+                        if (-not $allRegionPrices[$normalizedRegion].ContainsKey($vmSize)) {
+                            $allRegionPrices[$normalizedRegion][$vmSize] = $newEntry
+                            $totalVmMeters++
+                            $pageVmCount++
                         }
-                        if ($retailRate -and $retailRate -gt 0) {
-                            $allRegionPrices[$normalizedRegion][$vmSize].RetailHourly = [math]::Round($retailRate, 4)
-                            $allRegionPrices[$normalizedRegion][$vmSize].DiscountPct  = [math]::Round((1 - ($negotiatedRate / $retailRate)) * 100, 1)
-                        }
-                        $totalVmMeters++
-                        $pageVmCount++
                     }
                 }
                 if ($pageVmCount -gt 0) {
