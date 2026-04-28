@@ -2776,17 +2776,20 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                                 # of regions. Without this, "No alternatives" gets flagged on every
                                 # high-memory SKU. Capacity='Advisory' makes this visible in the UI
                                 # without misleading users into thinking the SKU is deployable.
+                                # Numeric capability fields are set to 0 (not '-') so downstream
+                                # [int] casts and -le 0 checks work; the delta formatter renders
+                                # 0 as '-' for display when paired with a non-positive target.
                                 $upgradeRecs.Add([pscustomobject]@{
                                     Rec = [pscustomobject]@{
                                         sku      = $mappedSku
-                                        vCPU     = '-'
-                                        ACU      = '-'
-                                        memGiB   = '-'
+                                        vCPU     = 0
+                                        ACU      = 0
+                                        memGiB   = 0
                                         family   = Get-SkuFamily $mappedSku
-                                        score    = '-'
+                                        score    = 0
                                         capacity = 'Advisory'
-                                        IOPS     = '-'
-                                        MaxDisks = '-'
+                                        IOPS     = 0
+                                        MaxDisks = 0
                                         priceMo  = $null
                                         priceIsNegotiated = $false
                                     }
