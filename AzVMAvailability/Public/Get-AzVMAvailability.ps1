@@ -2986,10 +2986,23 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
                         # (PriceSheetProperties schema has no reservation sub-object — only savingsPlan).
                         # RI savings here always come from the public Retail Prices API, so flag them
                         # with a permanent leading '*' to match the retail-fallback marker convention.
+                        # Format: "*<savings> (<pct>%)" where pct is savings as a percentage of the
+                        # corresponding PAYG fleet total (1Yr or 3Yr). Helps users compare reservation
+                        # discount magnitudes across SKUs/regions at a glance.
                         $ri1Entry = $ri1YrMap[$rec.sku]
-                        if ($ri1Entry) { $ri1Fleet = [double]$ri1Entry.Total * $entryQty; $ri1Savings = $recPaygFleet1Yr - $ri1Fleet; $ri1YrSavingsStr = '*' + $ri1Savings.ToString('N0') }
+                        if ($ri1Entry) {
+                            $ri1Fleet = [double]$ri1Entry.Total * $entryQty
+                            $ri1Savings = $recPaygFleet1Yr - $ri1Fleet
+                            $ri1Pct = if ($recPaygFleet1Yr -gt 0) { [math]::Round(($ri1Savings / $recPaygFleet1Yr) * 100, 0) } else { 0 }
+                            $ri1YrSavingsStr = '*' + $ri1Savings.ToString('N0') + ' (' + $ri1Pct + '%)'
+                        }
                         $ri3Entry = $ri3YrMap[$rec.sku]
-                        if ($ri3Entry) { $ri3Fleet = [double]$ri3Entry.Total * $entryQty; $ri3Savings = $recPaygFleet3Yr - $ri3Fleet; $ri3YrSavingsStr = '*' + $ri3Savings.ToString('N0') }
+                        if ($ri3Entry) {
+                            $ri3Fleet = [double]$ri3Entry.Total * $entryQty
+                            $ri3Savings = $recPaygFleet3Yr - $ri3Fleet
+                            $ri3Pct = if ($recPaygFleet3Yr -gt 0) { [math]::Round(($ri3Savings / $recPaygFleet3Yr) * 100, 0) } else { 0 }
+                            $ri3YrSavingsStr = '*' + $ri3Savings.ToString('N0') + ' (' + $ri3Pct + '%)'
+                        }
                     }
 
                     # Compute CPU, memory, and disk deltas
@@ -3397,7 +3410,7 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
             #      RI savings are always sourced from the public Retail Prices API.
             if ($FetchPricing) {
                 $retailFallback = @($script:RunContext.RetailFallbackRegions)
-                $riLegendText = "RI 3-Year Savings is always shown with a leading '*' because the Consumption Price Sheet API does not expose negotiated reservation rates. These values come from the public Azure Retail Prices API (list prices). Your actual reservation cost at purchase quote time may differ."
+                $riLegendText = "RI 3-Year Savings is always shown with a leading '*' because the Consumption Price Sheet API does not expose negotiated reservation rates. These values come from the public Azure Retail Prices API (list prices). Format: '*<savings> (<pct>%)' where pct is savings as a percentage of the 3-year PAYG fleet total. Your actual reservation cost at purchase quote time may differ."
                 foreach ($riHeader in @('RI 3-Year Savings')) {
                     $riColIdx = 0
                     for ($c = 1; $c -le $lastCol; $c++) {
@@ -3487,7 +3500,7 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
 
             $legendItems = @(
                 @{ Marker = '*';   Meaning = "RETAIL price (list, from Azure Retail Prices API). Negotiated EA/MCA/CSP rate was not available for that SKU/region. Your actual cost may be lower." }
-                @{ Marker = '* (RI)'; Meaning = "Reserved Instance (1-Yr / 3-Yr) Savings columns are ALWAYS marked with '*'. The Azure Consumption Price Sheet API does not expose negotiated reservation rates — only PAYG and Savings Plan effective prices. Reservation rates therefore come from the public Azure Retail Prices API (list prices). Your actual reservation cost at purchase quote time may be lower (EA/MCA discounts, regional offers, hybrid benefit). Treat RI savings shown here as a CONSERVATIVE LOWER BOUND." }
+                @{ Marker = '* (RI)'; Meaning = "Reserved Instance (1-Yr / 3-Yr) Savings columns are ALWAYS marked with '*'. The Azure Consumption Price Sheet API does not expose negotiated reservation rates — only PAYG and Savings Plan effective prices. Reservation rates therefore come from the public Azure Retail Prices API (list prices). Format: '*<savings> (<pct>%)' where pct is savings as a percentage of the corresponding PAYG fleet total. Your actual reservation cost at purchase quote time may be lower (EA/MCA discounts, regional offers, hybrid benefit). Treat RI savings shown here as a CONSERVATIVE LOWER BOUND." }
                 @{ Marker = '+N';  Meaning = "Recommended SKU costs MORE than current (e.g. +25 = +`$25/mo per VM, or +1 vCPU)." }
                 @{ Marker = '-N';  Meaning = "Recommended SKU costs LESS than current, or has fewer resources (e.g. -10 = saves `$10/mo per VM)." }
                 @{ Marker = '0';   Meaning = "No change between current and recommended (price, vCPU, memory, disks, or IOPS)." }
