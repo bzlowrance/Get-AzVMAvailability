@@ -38,24 +38,149 @@ function Get-AzActualPricing {
 
     $armLocation = $Region.ToLower() -replace '\s', ''
 
-    # Price Sheet meterLocation uses abbreviated names for gov/sovereign regions
-    # that don't match ARM region names. Each ARM key maps to an *ordered list* of
-    # candidate meterLocation keys (after normalization: lowercased, spaces/hyphens
-    # stripped). The first candidate present in the cache wins. Order reflects the
-    # most-specific name first, falling back to legacy/primary region names.
+    # Price Sheet meterLocation values use a different naming convention than ARM:
+    #   ARM is '<locality><geo>' or '<geoword><locality>' (westus, centralindia, japaneast)
+    #   Cache key is '<geoshort><locality>' (uswest, incentral, jaeast)
+    # Each ARM key maps to an *ordered list* of candidate meterLocation keys (after
+    # normalization: lowercased, spaces/hyphens stripped). First candidate present
+    # in the cache wins. Order: most-specific name first, then legacy fallbacks.
     #
-    # Examples of meterLocation values seen in EA price sheets (normalized form):
-    #   'US Gov Virginia' -> 'usgovvirginia' (modern, region-specific)
-    #   'US Gov VA'       -> 'usgovva'       (abbreviated)
-    #   'US Gov'          -> 'usgov'         (legacy: Virginia as primary region)
-    #   'US Gov Arizona'  -> 'usgovarizona'  | 'US Gov AZ' -> 'usgovaz'
-    #   'US Gov Texas'    -> 'usgovtexas'    | 'US Gov TX' -> 'usgovtx'
+    # Examples (normalized form):
+    #   ARM 'westus'             -> meterLocation 'US West'      -> 'uswest'
+    #   ARM 'eastus2'            -> meterLocation 'US East 2'    -> 'useast2'
+    #   ARM 'westeurope'         -> meterLocation 'EU West'      -> 'euwest'
+    #   ARM 'southeastasia'      -> meterLocation 'AP Southeast' -> 'apsoutheast'
+    #   ARM 'germanywestcentral' -> meterLocation 'DE West Central' -> 'dewestcentral'
+    #   ARM 'japaneast'          -> meterLocation 'JA East'      -> 'jaeast' (note: 'ja', not 'jp')
+    #   ARM 'usgovvirginia'      -> meterLocation 'US Gov Virginia' / 'US Gov VA' / 'US Gov'
     $armToMeterLocation = @{
-        'usgovarizona'  = @('usgovarizona', 'usgovaz')
-        'usgovtexas'    = @('usgovtexas', 'usgovtx')
-        'usgovvirginia' = @('usgovvirginia', 'usgovva', 'usgov')
-        'usdodcentral'  = @('usdodcentral', 'usdodc', 'usdod')
-        'usdodeast'     = @('usdodeast', 'usdode', 'usdod')
+        # ── US commercial ──
+        'westus'              = @('uswest')
+        'westus2'             = @('uswest2')
+        'westus3'             = @('uswest3')
+        'eastus'              = @('useast')
+        'eastus2'             = @('useast2')
+        'eastus3'             = @('useast3')
+        'centralus'           = @('uscentral')
+        'northcentralus'      = @('usnorthcentral')
+        'southcentralus'      = @('ussouthcentral')
+        'southcentralus2'     = @('ussouthcentral2')
+        'westcentralus'       = @('uswestcentral')
+        'southeastus'         = @('ussoutheast')
+        'southeastus3'        = @('ussoutheast3')
+        'southeastus5'        = @('ussoutheast5')
+        'southwestus'         = @('ussouthwest')
+        # ── Europe ──
+        'westeurope'          = @('euwest')
+        'northeurope'         = @('eunorth')
+        'uksouth'             = @('uksouth')
+        'uksouth2'            = @('uksouth2')
+        'ukwest'              = @('ukwest')
+        'francecentral'       = @('frcentral')
+        'francesouth'         = @('frsouth')
+        'germanywestcentral'  = @('dewestcentral')
+        'germanynorth'        = @('denorth')
+        'swedencentral'       = @('secentral')
+        'swedensouth'         = @('sesouth')
+        'norwayeast'          = @('noeast')
+        'norwaywest'          = @('nowest')
+        'switzerlandnorth'    = @('chnorth')
+        'switzerlandwest'     = @('chwest')
+        'italynorth'          = @('itnorth')
+        'spaincentral'        = @('escentral')
+        'polandcentral'       = @('plcentral')
+        'israelcentral'       = @('ilcentral')
+        'israelnorthwest'     = @('ilnorthwest')
+        'denmarkeast'         = @('dkeast')
+        'austriaeast'         = @('ateast')
+        'belgiumcentral'      = @('becentral')
+        # ── Asia Pacific ──
+        'southeastasia'       = @('apsoutheast')
+        'eastasia'            = @('apeast')
+        'japaneast'           = @('jaeast')   # NOT 'jp' — EA price sheet uses 'ja'
+        'japanwest'           = @('jawest')
+        'koreacentral'        = @('krcentral')
+        'koreasouth'          = @('krsouth')
+        'centralindia'        = @('incentral')
+        'southindia'          = @('insouth')
+        'westindia'           = @('inwest')
+        'southcentralindia'   = @('insouthcentral')
+        'australiaeast'       = @('aueast')
+        'australiasoutheast'  = @('ausoutheast')
+        'australiacentral'    = @('aucentral')
+        'australiacentral2'   = @('aucentral2')
+        'newzealandnorth'     = @('nznorth')
+        'malaysiawest'        = @('mywest')
+        'indonesiacentral'    = @('idcentral')
+        'taiwannorth'         = @('twnorth')
+        'taiwannorthwest'     = @('twnorthwest')
+        # ── Americas (non-US) ──
+        'canadacentral'       = @('cacentral')
+        'canadaeast'          = @('caeast')
+        'brazilsouth'         = @('brsouth')
+        'brazilsoutheast'     = @('brsoutheast')
+        'chilecentral'        = @('clcentral')
+        'mexicocentral'       = @('mxcentral')
+        # ── Middle East / Africa ──
+        'uaecentral'          = @('aecentral')
+        'uaenorth'            = @('aenorth')
+        'qatarcentral'        = @('qacentral')
+        'southafricanorth'    = @('zanorth')
+        'southafricawest'     = @('zawest')
+        # ── US sovereign (Gov / DoD) ──
+        'usgovarizona'        = @('usgovarizona', 'usgovaz')
+        'usgovtexas'          = @('usgovtexas', 'usgovtx')
+        'usgovvirginia'       = @('usgovvirginia', 'usgovva', 'usgov')
+        'usdodcentral'        = @('usdodcentral', 'usdodc', 'usdod')
+        'usdodeast'           = @('usdodeast', 'usdode', 'usdod')
+    }
+
+    # Generic fallback: derive likely cache keys from an ARM region by swapping
+    # locality and geo tokens. Catches future regions added before the explicit
+    # table is updated. Tries every (locality, geoLong, geoShort) combo.
+    $geoLongToShort = @{
+        'us' = 'us'; 'europe' = 'eu'; 'asia' = 'ap'; 'uk' = 'uk'
+        'australia' = 'au'; 'japan' = 'ja'; 'korea' = 'kr'; 'india' = 'in'
+        'canada' = 'ca'; 'brazil' = 'br'; 'chile' = 'cl'; 'mexico' = 'mx'
+        'france' = 'fr'; 'germany' = 'de'; 'sweden' = 'se'; 'norway' = 'no'
+        'switzerland' = 'ch'; 'italy' = 'it'; 'spain' = 'es'; 'poland' = 'pl'
+        'israel' = 'il'; 'denmark' = 'dk'; 'austria' = 'at'; 'belgium' = 'be'
+        'newzealand' = 'nz'; 'malaysia' = 'my'; 'indonesia' = 'id'
+        'taiwan' = 'tw'; 'uae' = 'ae'; 'qatar' = 'qa'; 'southafrica' = 'za'
+    }
+    $deriveAliasCandidates = {
+        param($arn)
+        $candidates = [System.Collections.Generic.List[string]]::new()
+        foreach ($geoLong in $geoLongToShort.Keys) {
+            $geoShort = $geoLongToShort[$geoLong]
+            # Pattern A: ARM ends with geoLong (westeurope, japaneast, southeastasia)
+            #            -> swap to <geoShort><locality> (euwest, jaeast, apsoutheast)
+            if ($arn.EndsWith($geoLong) -and $arn.Length -gt $geoLong.Length) {
+                $locality = $arn.Substring(0, $arn.Length - $geoLong.Length)
+                $candidates.Add("$geoShort$locality") | Out-Null
+            }
+            # Pattern B: ARM starts with geoLong (centralindia would be 'india'+'central'
+            #            but ARM is centralindia which is 'central'+'india', already pattern A)
+            #            ARM germanywestcentral -> 'germany' prefix, locality 'westcentral'
+            #            -> 'de' + 'westcentral' = 'dewestcentral'
+            if ($arn.StartsWith($geoLong) -and $arn.Length -gt $geoLong.Length) {
+                $locality = $arn.Substring($geoLong.Length)
+                $candidates.Add("$geoShort$locality") | Out-Null
+            }
+            # Pattern C: ARM also ends with trailing digit (eastus2, westus3) — the
+            #            digit is part of the locality+geo+digit pattern. Try
+            #            stripping the digit for a locality match too.
+            if ($arn -match "^(.+?)($geoLong)(\d+)$") {
+                $candidates.Add("$geoShort$($Matches[1])$($Matches[3])") | Out-Null
+            }
+        }
+        # Deduplicate while preserving order
+        $seen = @{}
+        $unique = [System.Collections.Generic.List[string]]::new()
+        foreach ($c in $candidates) {
+            if (-not $seen.ContainsKey($c)) { $seen[$c] = $true; $unique.Add($c) | Out-Null }
+        }
+        return $unique
     }
 
     # ── Disk cache ──
@@ -85,14 +210,18 @@ function Get-AzActualPricing {
         Remove-Item -ErrorAction SilentlyContinue
 
     # Helper: resolve an ARM region to the first matching cached meterLocation key.
-    # Order: exact ARM name first, then each alias candidate from $armToMeterLocation.
+    # Order: exact ARM name -> explicit alias table -> generic geo-permutation fallback.
     $resolvePriceSheetKey = {
         param($arn, $cache)
-        if ($cache.ContainsKey($arn)) { return $arn }
+        if ($cache.ContainsKey($arn) -and $cache[$arn] -and $cache[$arn].Count -gt 0) { return $arn }
         if ($armToMeterLocation.ContainsKey($arn)) {
             foreach ($cand in @($armToMeterLocation[$arn])) {
                 if ($cache.ContainsKey($cand) -and $cache[$cand] -and $cache[$cand].Count -gt 0) { return $cand }
             }
+        }
+        # Generic fallback — try permuted aliases derived from known geo tokens.
+        foreach ($cand in (& $deriveAliasCandidates $arn)) {
+            if ($cache.ContainsKey($cand) -and $cache[$cand] -and $cache[$cand].Count -gt 0) { return $cand }
         }
         return $null
     }
@@ -119,10 +248,16 @@ function Get-AzActualPricing {
             Write-Host "  Tier 1 (Price Sheet): $($regionPrices.Count) negotiated SKU prices for '$Region'$aliasSuffix (cached)" -ForegroundColor DarkGray
         }
         else {
-            $govKeys = @($allRegionPrices.Keys | Where-Object { $_ -match 'gov|dod|china|german|virginia|arizona|texas' } | Sort-Object)
+            $isSovereignRegion = $armLocation -match '^(usgov|usdod)'
             $candList = if ($armToMeterLocation.ContainsKey($armLocation)) { @($armToMeterLocation[$armLocation]) -join "', '" } else { '' }
             $aliasNote = if ($candList) { " (tried '$candList')" } else { '' }
-            $hint = if ($govKeys.Count -gt 0) { " Sovereign keys present in cache: $($govKeys -join ', ')." } else { ' No sovereign keys present in cache.' }
+            if ($isSovereignRegion) {
+                $govKeys = @($allRegionPrices.Keys | Where-Object { $_ -match 'gov|dod|china|german|virginia|arizona|texas' } | Sort-Object)
+                $hint = if ($govKeys.Count -gt 0) { " Sovereign keys present in cache: $($govKeys -join ', ')." } else { ' No sovereign keys present in cache.' }
+            }
+            else {
+                $hint = if ($allRegionPrices.Count -gt 0) { " $($allRegionPrices.Count) other region(s) cached — enrollment may not have meters for this region." } else { '' }
+            }
             Write-Host "  Tier 1 (Price Sheet): no negotiated rates for '$Region'$aliasNote — falling back to retail.$hint" -ForegroundColor DarkYellow
         }
         return $regionPrices
@@ -180,10 +315,16 @@ function Get-AzActualPricing {
                     Write-Host "  Tier 1 (Price Sheet): $($regionPrices.Count) negotiated SKU prices for '$Region'$aliasSuffix (cached)" -ForegroundColor DarkGray
                 }
                 else {
-                    $govKeys = @($allRegionPrices.Keys | Where-Object { $_ -match 'gov|dod|china|german|virginia|arizona|texas' } | Sort-Object)
+                    $isSovereignRegion = $armLocation -match '^(usgov|usdod)'
                     $candList = if ($armToMeterLocation.ContainsKey($armLocation)) { @($armToMeterLocation[$armLocation]) -join "', '" } else { '' }
                     $aliasNote = if ($candList) { " (tried '$candList')" } else { '' }
-                    $hint = if ($govKeys.Count -gt 0) { " Sovereign keys present in cache: $($govKeys -join ', ')." } else { ' No sovereign keys present in cache.' }
+                    if ($isSovereignRegion) {
+                        $govKeys = @($allRegionPrices.Keys | Where-Object { $_ -match 'gov|dod|china|german|virginia|arizona|texas' } | Sort-Object)
+                        $hint = if ($govKeys.Count -gt 0) { " Sovereign keys present in cache: $($govKeys -join ', ')." } else { ' No sovereign keys present in cache.' }
+                    }
+                    else {
+                        $hint = if ($allRegionPrices.Count -gt 0) { " $($allRegionPrices.Count) other region(s) cached — enrollment may not have meters for this region." } else { '' }
+                    }
                     Write-Host "  Tier 1 (Price Sheet): no negotiated rates for '$Region'$aliasNote — falling back to retail.$hint" -ForegroundColor DarkYellow
                 }
                 return $regionPrices
@@ -202,6 +343,21 @@ function Get-AzActualPricing {
     }
     $armUrl = $AzureEndpoints.ResourceManagerUrl
 
+    # Corporate-proxy support: Az.Accounts uses its own HttpClient that already
+    # negotiates with the proxy, but plain Invoke-RestMethod calls (used below for
+    # the Price Sheet API) inherit the system default proxy WITHOUT credentials,
+    # which trips HTTP 407 (Proxy Authentication Required) on auth-required
+    # corporate proxies (e.g. web-proxy.web.boeing.com). Attach the current
+    # user's default credentials once so the Price Sheet calls can punch through.
+    try {
+        if ([System.Net.WebRequest]::DefaultWebProxy -and -not [System.Net.WebRequest]::DefaultWebProxy.Credentials) {
+            [System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
+        }
+    }
+    catch {
+        Write-Verbose "Could not set DefaultWebProxy.Credentials: $($_.Exception.Message)"
+    }
+
     # Negative-cache check: if a recent Tier 1 attempt failed (e.g. HTTP 429), skip
     # straight to Tier 2 until the cool-down expires. Avoids 30+ minute throttling
     # storms across consecutive runs while the EA Price Sheet API is rate-limiting.
@@ -210,10 +366,18 @@ function Get-AzActualPricing {
             $neg = Get-Content $negCacheFile -Raw | ConvertFrom-Json
             $negAt = [datetime]$neg.At
             $cool = [int]($neg.CoolDownSeconds)
+            $negStatus = [int]($neg.Status)
             $remaining = ($negAt.AddSeconds($cool) - (Get-Date)).TotalSeconds
-            if ($remaining -gt 0) {
+            # Discard stale cooldown entries whose status isn't a real HTTP error code
+            # (e.g. older builds misparsed proxy port numbers as status 310). Without
+            # this guard, those entries would keep us locked out of Tier 1 forever.
+            if ($negStatus -lt 400 -or $negStatus -gt 599) {
+                Write-Verbose "Discarding implausible Tier 1 negative-cache status ($negStatus); retrying."
+                Remove-Item $negCacheFile -ErrorAction SilentlyContinue
+            }
+            elseif ($remaining -gt 0) {
                 $remMin = [math]::Ceiling($remaining / 60)
-                Write-Host "  Tier 1 (Price Sheet): skipped — prior failure ($($neg.Status)) cooling down for ~$remMin min. Using retail." -ForegroundColor DarkYellow
+                Write-Host "  Tier 1 (Price Sheet): skipped — prior failure ($negStatus) cooling down for ~$remMin min. Using retail." -ForegroundColor DarkYellow
                 return $null
             }
             else {
@@ -541,7 +705,22 @@ function Get-AzActualPricing {
         $psError = $_
         $psStatus = $null
         if ($psError.Exception.Response) { $psStatus = [int]$psError.Exception.Response.StatusCode }
-        if (-not $psStatus -and $psError.Exception.Message -match '(\d{3})') { $psStatus = [int]$Matches[1] }
+        if (-not $psStatus) {
+            # Prefer explicit 'status code NNN' / 'HTTP NNN' patterns over any 3-digit
+            # number — corporate-proxy errors embed port numbers (e.g. ':31060') that
+            # otherwise misclassify as HTTP 310.
+            $msg = $psError.Exception.Message
+            if ($msg -match "status code\s*['""]?(\d{3})") { $psStatus = [int]$Matches[1] }
+            elseif ($msg -match '\bHTTP\s+(\d{3})\b') { $psStatus = [int]$Matches[1] }
+            elseif ($msg -match '\((\d{3})\)') { $psStatus = [int]$Matches[1] }
+        }
+        if ($psStatus -eq 407) {
+            Write-Warning "Tier 1 (Price Sheet): proxy authentication required (HTTP 407) at '$([System.Net.WebRequest]::DefaultWebProxy.GetProxy($armUrl))'."
+            Write-Warning "  The current user's default credentials were sent but rejected. Try one of:"
+            Write-Warning "    \$cred = Get-Credential; [System.Net.WebRequest]::DefaultWebProxy.Credentials = \$cred"
+            Write-Warning "    or set HTTPS_PROXY/HTTP_PROXY env vars with embedded credentials"
+            Write-Warning "    or run from a network without a proxy in front of management.azure.com."
+        }
         Write-Host "  Tier 1 (Price Sheet): failed$(if ($psStatus) { " (HTTP $psStatus)" }) — trying Tier 2..." -ForegroundColor DarkGray
         Write-Verbose "Tier 1 (Price Sheet) failed$(if ($psStatus) { " (HTTP $psStatus)" }): $($psError.Exception.Message). Falling through to Tier 2."
         # Persist negative cache so subsequent runs short-circuit straight to Tier 2.
@@ -645,7 +824,12 @@ function Get-AzActualPricing {
             $errorMsg = $_.Exception.Message
             $statusCode = $null
             if ($_.Exception.Response) { $statusCode = [int]$_.Exception.Response.StatusCode }
-            if (-not $statusCode -and $errorMsg -match '(\d{3})') { $statusCode = [int]$Matches[1] }
+            if (-not $statusCode) {
+                # See Tier 1 catch — avoid misclassifying proxy port numbers as the HTTP status.
+                if ($errorMsg -match "status code\s*['""]?(\d{3})") { $statusCode = [int]$Matches[1] }
+                elseif ($errorMsg -match '\bHTTP\s+(\d{3})\b') { $statusCode = [int]$Matches[1] }
+                elseif ($errorMsg -match '\((\d{3})\)') { $statusCode = [int]$Matches[1] }
+            }
 
             if (-not $Caches.NegotiatedPricingWarned) {
                 $Caches.NegotiatedPricingWarned = $true
@@ -659,6 +843,14 @@ function Get-AzActualPricing {
                         Write-Warning "  - Cost Management Reader  (scope: subscription)"
                         Write-Warning "  - Reader                   (scope: subscription)"
                         Write-Warning "  To assign:  New-AzRoleAssignment -SignInName <user@domain> -RoleDefinitionName 'Cost Management Reader' -Scope /subscriptions/$SubscriptionId"
+                    }
+                    407 {
+                        $proxyUri = try { [System.Net.WebRequest]::DefaultWebProxy.GetProxy($armUrl) } catch { '<unknown>' }
+                        Write-Warning "Cost Management: proxy authentication required (HTTP 407) at '$proxyUri'."
+                        Write-Warning "  Default Windows credentials were sent but rejected. Options:"
+                        Write-Warning "    \$cred = Get-Credential; [System.Net.WebRequest]::DefaultWebProxy.Credentials = \$cred"
+                        Write-Warning "    or set HTTPS_PROXY/HTTP_PROXY env vars with embedded credentials"
+                        Write-Warning "    or run from a network without a proxy in front of management.azure.com."
                     }
                     {$_ -in 429, 503} {
                         Write-Warning "Cost Management: throttled/unavailable (HTTP $statusCode). Retries exhausted."
