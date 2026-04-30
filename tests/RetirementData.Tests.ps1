@@ -29,8 +29,6 @@ BeforeDiscovery {
         @{ Sku = 'Standard_DS14';         ExpectedSeries = 'Dv1' }
         @{ Sku = 'Standard_D4_v2';        ExpectedSeries = 'Dv2' }
         @{ Sku = 'Standard_DS14_v2';      ExpectedSeries = 'Dv2' }
-        @{ Sku = 'Basic_A4';              ExpectedSeries = 'Av1' }
-        @{ Sku = 'Standard_A4';           ExpectedSeries = 'Av1' }
         @{ Sku = 'Standard_A4_v2';        ExpectedSeries = 'Av2' }
         @{ Sku = 'Standard_A4m_v2';       ExpectedSeries = 'Av2' }
         @{ Sku = 'Standard_B4ms';         ExpectedSeries = 'Bv1' }
@@ -63,6 +61,8 @@ BeforeDiscovery {
         @{ Sku = 'Standard_ND6s';         ExpectedSeries = 'NDv1' }
         @{ Sku = 'Standard_ND40rs_v2';    ExpectedSeries = 'NDv2' }
         @{ Sku = 'Standard_NV6';          ExpectedSeries = 'NVv1' }
+        @{ Sku = 'Basic_A4';              ExpectedSeries = 'Av1' }
+        @{ Sku = 'Standard_A4';           ExpectedSeries = 'Av1' }
     )
 
     $script:CurrentGenSkus = @(

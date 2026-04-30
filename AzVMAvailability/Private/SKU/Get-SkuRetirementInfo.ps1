@@ -18,7 +18,7 @@ function Get-SkuRetirementInfo {
         # Scheduled for retirement (announced, planned retirement date)
         @{ Pattern = '^Standard_DS?\d+$';              Series = 'Dv1';     RetireDate = '2028-05-01'; Status = 'Retiring' }
         @{ Pattern = '^Standard_DS?\d+_v2(_Promo)?$';  Series = 'Dv2';     RetireDate = '2028-05-01'; Status = 'Retiring' }
-        @{ Pattern = '^(Basic_A\d+|Standard_A\d+)$';  Series = 'Av1';     RetireDate = '2028-11-15'; Status = 'Retiring' }
+        @{ Pattern = '^(Basic_A\d+|Standard_A\d+)$';  Series = 'Av1';     RetireDate = '2024-08-31'; Status = 'Retired' }
         @{ Pattern = '^Standard_A\d+m?_v2$';           Series = 'Av2';     RetireDate = '2028-11-15'; Status = 'Retiring' }
         @{ Pattern = '^Standard_B\d+[a-z]*$';          Series = 'Bv1';     RetireDate = '2028-11-15'; Status = 'Retiring' }
         @{ Pattern = '^Standard_GS?\d+$';              Series = 'G/GS';    RetireDate = '2028-11-15'; Status = 'Retiring' }
