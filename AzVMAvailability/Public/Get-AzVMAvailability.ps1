@@ -2128,11 +2128,20 @@ try {
                     $elapsed = $pollSw.Elapsed
                     $elapsedStr = '{0:mm\:ss}' -f $elapsed
                     if ($done -gt 0 -and $done -lt $totalItems) {
-                        $secsPerItem = $elapsed.TotalSeconds / $done
-                        $etaSecs = [math]::Ceiling($secsPerItem * ($totalItems - $done))
-                        $etaMin = [math]::Floor($etaSecs / 60)
-                        $etaSec = $etaSecs % 60
-                        $etaStr = if ($etaMin -gt 0) { "${etaMin}m ${etaSec}s remaining" } else { "${etaSec}s remaining" }
+                        $remaining = $totalItems - $done
+                        # When only a handful of stragglers remain, the average-throughput
+                        # ETA is wildly inaccurate (the last items are usually slow regions /
+                        # throttled subs). Switch to a non-misleading "finalizing" message.
+                        if ($remaining -le [math]::Max(3, [math]::Ceiling($totalItems * 0.005))) {
+                            $etaStr = "finalizing $remaining straggler$(if ($remaining -eq 1) { '' } else { 's' })..."
+                        }
+                        else {
+                            $secsPerItem = $elapsed.TotalSeconds / $done
+                            $etaSecs = [math]::Ceiling($secsPerItem * $remaining)
+                            $etaMin = [math]::Floor($etaSecs / 60)
+                            $etaSec = $etaSecs % 60
+                            $etaStr = if ($etaMin -gt 0) { "${etaMin}m ${etaSec}s remaining" } else { "${etaSec}s remaining" }
+                        }
                     }
                     elseif ($done -ge $totalItems) {
                         $etaStr = 'finalizing...'
@@ -2143,6 +2152,10 @@ try {
                     Write-Progress -Activity "Scanning Azure Regions" -Status "$done / $totalItems work items - $elapsedStr elapsed - $etaStr" -PercentComplete $pct
                     Start-Sleep -Milliseconds 1000
                 }
+                # Clear bar immediately when the poll loop exits so it doesn't linger
+                # on screen during retry / regrouping (some terminals leave the last
+                # frame visible until the next progress write).
+                Write-Progress -Activity "Scanning Azure Regions" -Completed
                 $ProgressPreference = $savedScanProgressPref
                 $allScanResults = Receive-Job -Job $parallelJob -Wait -AutoRemoveJob
             }
@@ -2205,6 +2218,10 @@ try {
         $itemsPerSec = if ($scanElapsed.TotalSeconds -gt 0) { [math]::Round($totalItems / $scanElapsed.TotalSeconds, 1) } else { 0 }
         Write-Host "  Scan complete: $totalItems work items in $scanElapsedLabel ($itemsPerSec items/sec)" -ForegroundColor Green
         Write-Progress -Activity "Scanning Azure Regions" -Completed
+        # Suppress any further progress output during regrouping/announce phase —
+        # the per-sub `[N/total]` lines are the visible activity from here on.
+        $savedRegroupProgressPref = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
 
         # Pre-declare lifecycle indexes so they are populated during regrouping (single pass)
         $needLifecycleIndexes = ($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count -gt 0
@@ -2263,6 +2280,7 @@ try {
         $bearerToken = $null
 
         Write-Progress -Activity "Scanning Azure Regions" -Completed
+        if ($savedRegroupProgressPref) { $ProgressPreference = $savedRegroupProgressPref }
 
         # Re-emit the scan-complete line for the second flow (uses wall-clock since scan start).
         # Don't overwrite $scanElapsed if the stopwatch already captured it \u2014 we want the
