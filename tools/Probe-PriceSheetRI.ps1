@@ -9,9 +9,10 @@
     represented for the current tenant.
 
     Goal: confirm exactly what fields the Price Sheet exposes for each tier so
-    we can extend Get-AzActualPricing to populate Reservation1Yr/3Yr,
-    SavingsPlan1Yr/3Yr, and Spot maps with negotiated rates (currently it only
-    captures PAYG Regular).
+    we can extend Get-AzActualPricing where negotiated capture is still
+    incomplete. The module already harvests PAYG Regular and negotiated
+    SavingsPlan1Yr/3Yr pricing; Reservation1Yr/3Yr and Spot negotiated rates
+    still need to be confirmed and populated from the price sheet.
 
     Works for both commercial (AzureCloud) and sovereign (AzureUSGovernment,
     AzureChinaCloud) tenants — uses the current Az context to derive the
